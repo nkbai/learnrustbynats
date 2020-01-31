@@ -84,7 +84,10 @@ impl Parser {
     对收到的字节序列进行解析,解析完毕后得到pub或者sub消息,
     同时有可能没有消息或者缓冲区里面还有其他消息
     */
-    pub fn parse(&mut self, buf: &[u8]) -> Result<(ParseResult, usize)> {
+    pub fn parse<'a, 'b>(&'b mut self, buf: &'a [u8]) -> Result<(ParseResult<'a>, usize)>
+    where
+        'b: 'a,
+    {
         let mut b;
         let mut i = 0;
         while i < buf.len() {
@@ -295,6 +298,29 @@ impl Parser {
         let size_buf = &arg_buf[arg_buf.len() - pos..];
         let szb = unsafe { std::str::from_utf8_unchecked(size_buf) };
         szb.parse::<usize>().map_err(|_| NError::new(ERROR_PARSE))
+    }
+    pub fn iter_mut<'a>(&'a mut self, buf: &'a [u8]) -> ParseIter<'a> {
+        ParseIter { parser: self, buf }
+    }
+}
+struct ParseIter<'a> {
+    parser: &'a mut Parser,
+    buf: &'a [u8],
+}
+
+impl<'a> Iterator for ParseIter<'a> {
+    type Item = Result<ParseResult<'a>>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.buf.len() == 0 {
+            return None;
+        }
+        let r: Result<(ParseResult<'a>, usize)> = self.parser.parse(self.buf);
+
+        Some(r.map(|r| {
+            //            self.buf = &self.buf[r.1..];
+            r.0
+        }));
+        return Some(Ok(ParseResult::NoMsg));
     }
 }
 #[cfg(test)]
