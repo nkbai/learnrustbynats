@@ -304,7 +304,7 @@ impl Parser {
     }
 }
 struct ParseIter<'a> {
-    parser: &'a mut Parser,
+    parser: *mut Parser,
     buf: &'a [u8],
 }
 
@@ -314,13 +314,13 @@ impl<'a> Iterator for ParseIter<'a> {
         if self.buf.len() == 0 {
             return None;
         }
-        let r: Result<(ParseResult<'a>, usize)> = self.parser.parse(self.buf);
+        let parser = unsafe { &mut *self.parser };
+        let r: Result<(ParseResult<'a>, usize)> = parser.parse(self.buf);
 
-        Some(r.map(|r| {
-            //            self.buf = &self.buf[r.1..];
+        return Some(r.map(|r| {
+            self.buf = &self.buf[r.1..];
             r.0
         }));
-        return Some(Ok(ParseResult::NoMsg));
     }
 }
 #[cfg(test)]
@@ -457,6 +457,45 @@ mod tests {
             assert_eq!(sub.queue, Some("queue"));
         } else {
             assert!(false, "unkown error");
+        }
+    }
+    #[test]
+    fn test_sub2() {
+        let mut p = Parser::new();
+        let mut buf = "SUB subject 1\r\nSUB subject2 2\r\n".as_bytes();
+        let mut pos = 0;
+        loop {
+            let r = p.parse(buf);
+            assert!(!r.is_err());
+            let r = r.unwrap();
+            buf = &buf[r.1..];
+            match r.0 {
+                ParseResult::Sub(sub) => {
+                    println!("sub.subect={}", sub.subject);
+                }
+                _ => panic!(),
+            }
+            if buf.len() == 0 {
+                break;
+            }
+        }
+    }
+    #[test]
+    fn test_sub3() {
+        let mut p = Parser::new();
+        let buf = "SUB subject 1\r\nSUB subject2 2\r\n".as_bytes();
+        for r in p.iter_mut(buf) {
+            assert!(!r.is_err());
+            let r = r.unwrap();
+            match r {
+                ParseResult::Sub(sub) => {
+                    println!("sub.subect={}", sub.subject);
+                }
+                ParseResult::NoMsg => {
+                    break;
+                }
+                _ => panic!(),
+            }
         }
     }
     #[test]
