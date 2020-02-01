@@ -84,10 +84,7 @@ impl Parser {
     对收到的字节序列进行解析,解析完毕后得到pub或者sub消息,
     同时有可能没有消息或者缓冲区里面还有其他消息
     */
-    pub fn parse<'a, 'b>(&'b mut self, buf: &'a [u8]) -> Result<(ParseResult<'a>, usize)>
-    where
-        'b: 'a,
-    {
+    pub fn parse<'a>(&'a mut self, buf: &'a [u8]) -> Result<(ParseResult<'_>, usize)> {
         let mut b;
         let mut i = 0;
         while i < buf.len() {
@@ -314,13 +311,13 @@ impl<'a> Iterator for ParseIter<'a> {
         if self.buf.len() == 0 {
             return None;
         }
-        let r: Result<(ParseResult<'a>, usize)> = self.parser.parse(self.buf);
+        let r: Result<(ParseResult<'_>, usize)> = self.parser.parse(self.buf);
 
-        Some(r.map(|r| {
+        return Some(r.map(|r| {
             //            self.buf = &self.buf[r.1..];
             r.0
         }));
-        return Some(Ok(ParseResult::NoMsg));
+        //        return Some(Ok(ParseResult::NoMsg));
     }
 }
 #[cfg(test)]
@@ -457,6 +454,14 @@ mod tests {
             assert_eq!(sub.queue, Some("queue"));
         } else {
             assert!(false, "unkown error");
+        }
+    }
+    #[test]
+    fn test_sub2() {
+        let mut p = Parser::new();
+        let buf = "SUB subject 1\r\nSUB subject2 2\r\n".as_bytes();
+        for r in p.iter_mut(buf) {
+            println!("r={:?}", r);
         }
     }
     #[test]
