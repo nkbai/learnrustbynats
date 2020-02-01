@@ -299,11 +299,11 @@ impl Parser {
         let szb = unsafe { std::str::from_utf8_unchecked(size_buf) };
         szb.parse::<usize>().map_err(|_| NError::new(ERROR_PARSE))
     }
-    pub fn iter_mut<'a>(&'a mut self, buf: &'a [u8]) -> ParseIter<'a> {
+    pub fn iter<'a>(&'a mut self, buf: &'a [u8]) -> ParseIter<'a> {
         ParseIter { parser: self, buf }
     }
 }
-struct ParseIter<'a> {
+pub struct ParseIter<'a> {
     parser: *mut Parser,
     buf: &'a [u8],
 }
@@ -314,6 +314,12 @@ impl<'a> Iterator for ParseIter<'a> {
         if self.buf.len() == 0 {
             return None;
         }
+        /*
+        对于外部使用这类来说,这里使用unsafe是安全的.
+        首先,ParseIter<'a>的生命周期一定是小于self.parser,也就是说parser这个指针一定是有效的.
+        其次,ParseIter的构造只能通过Parser.iter来构造,所以parser一定是mutable的
+        所以不存在内存安全问题.
+        */
         let parser = unsafe { &mut *self.parser };
         let r: Result<(ParseResult<'a>, usize)> = parser.parse(self.buf);
 
@@ -484,7 +490,7 @@ mod tests {
     fn test_sub3() {
         let mut p = Parser::new();
         let buf = "SUB subject 1\r\nSUB subject2 2\r\n".as_bytes();
-        for r in p.iter_mut(buf) {
+        for r in p.iter(buf) {
             assert!(!r.is_err());
             let r = r.unwrap();
             match r {
