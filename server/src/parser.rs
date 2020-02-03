@@ -58,6 +58,10 @@ pub enum ParseResult<'a> {
     Sub(SubArg<'a>),
     Pub(PubArg<'a>),
 }
+/*
+这个长度很有关系,必须能够将一个完整的主题以及参数放进去,
+所以要限制subject的长度
+*/
 const BUF_LEN: usize = 512;
 pub struct Parser {
     state: ParseState,
@@ -504,6 +508,33 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn test_sub4() {
+        /*
+        这种iter的实现方法有问题,是因为buf放到了Parser里面,
+        这会造成下一次的结果覆盖上一次的
+        */
+        let mut p = Parser::new();
+        let buf = "SUB subject 1\r\nSUB xxxx2 2\r\n".as_bytes();
+        let mut it = p.iter(buf);
+        let v1 = it.next();
+        let v2 = it.next();
+        println!("v1={:?}", v1);
+        println!("v2={:?}", v2);
+    }
+    //    #[test]
+    //    fn test_sub5() {
+    //        struct P {
+    //            buf: Option<Vec<u8>>,
+    //        }
+    //        let mut p = P {
+    //            buf: Some(Vec::from("hello,world")),
+    //        };
+    //        let ss = p.buf.as_ref().unwrap().as_slice();
+    //        println!("ss={:?}", ss);
+    //        p.buf.take();
+    //        println!("ss={:?}", ss);
+    //    }
     #[test]
     fn test_no_msg() {
         let mut p = Parser::new();

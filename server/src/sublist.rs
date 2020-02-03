@@ -33,10 +33,11 @@ foo.dd
     负面: 当新增或者删除subscriber的时候也要来cache里面遍历,修改.
 */
 use crate::error::*;
+use crate::simple_sublist::*;
+
 const PWC: &str = "*";
 const FWC: &str = ">";
-type ArcSubscription = Arc<Subscription>;
-type ArcSubResult = Arc<SubResult>;
+
 #[derive(Debug, Default)]
 pub struct Level {
     pwc: Option<Box<TrieNode>>,            //*
@@ -58,23 +59,13 @@ impl TrieNode {
         }
     }
 }
+
 #[derive(Debug, Default)]
-pub struct Subscription {
-    subject: String,
-    queue: Option<String>,
-    sid: String,
-}
-#[derive(Debug, Default)]
-pub struct SubResult {
-    subs: Vec<ArcSubscription>,
-    qsubs: Vec<Vec<ArcSubscription>>,
-}
-#[derive(Debug, Default)]
-struct SubList {
+struct TrieSubList {
     cache: HashMap<String, ArcSubResult>,
     root: Level,
 }
-impl SubList {
+impl TrieSubList {
     pub fn new() -> Self {
         Self {
             cache: Default::default(),
@@ -142,7 +133,7 @@ mod tests {
     fn test() {}
     #[test]
     fn test_insert() {
-        let mut sl = SubList::new();
+        let mut sl = TrieSubList::new();
         let mut sub = Arc::new(Subscription {
             subject: "a.b.c".to_string(),
             queue: None,
@@ -170,5 +161,31 @@ mod tests {
         let nodec = nodec.unwrap();
         println!("nodec.next is none:{}", nodec.as_ref().next.is_none());
         assert_eq!(nodec.subs.len(), 1);
+    }
+    #[test]
+    fn test_lru() {
+        use lru::*;
+        let mut cache = LruCache::new(2);
+        cache.put("apple", 3);
+        cache.put("banana", 2);
+
+        assert_eq!(*cache.get(&"apple").unwrap(), 3);
+        assert_eq!(*cache.get(&"banana").unwrap(), 2);
+        assert!(cache.get(&"pear").is_none());
+
+        assert_eq!(cache.put("banana", 4), Some(2));
+        assert_eq!(cache.put("pear", 5), None);
+
+        assert_eq!(*cache.get(&"pear").unwrap(), 5);
+        assert_eq!(*cache.get(&"banana").unwrap(), 4);
+        assert!(cache.get(&"apple").is_none());
+
+        {
+            let v = cache.get_mut(&"banana").unwrap();
+            *v = 6;
+        }
+
+        assert_eq!(*cache.get(&"banana").unwrap(), 6);
+        for (k, v) in cache.iter_mut() {}
     }
 }

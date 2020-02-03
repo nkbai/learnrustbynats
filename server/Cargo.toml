@@ -19,6 +19,7 @@ bitflags="1.0"
 lazy_static="1.0"
 get_if_addrs="0.5"
 futures = { version = "0.3.0", features = ["async-await"] }
+lru="0.4"
 
 [dev-dependencies]
 tokio-test = { version = "0.2.0", path="../../tokio-test" }
