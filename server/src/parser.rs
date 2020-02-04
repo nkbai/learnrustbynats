@@ -19,6 +19,7 @@ use crate::error::*;
 #[macro_export]
 macro_rules! parse_error {
     ( ) => {{
+        panic!("parse error");
         return Err(NError::new(ERROR_PARSE));
     }};
 }
@@ -131,7 +132,7 @@ impl Parser {
                     _ => {
                         self.state = OpSubArg;
                         self.arg_len = 0;
-                        i -= 1;
+                        continue;
                     }
                 },
                 OpSubArg => match b {
@@ -162,7 +163,7 @@ impl Parser {
                     _ => {
                         self.state = OpPubArg;
                         self.arg_len = 0;
-                        i -= 1;
+                        continue;
                     }
                 },
                 OpPubArg => match b {

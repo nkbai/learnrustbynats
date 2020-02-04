@@ -58,6 +58,12 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
                 return;
             }
             let n = n.unwrap();
+            if n == 0 {
+                //返回长度为0,说明连接关闭了,对方主动关闭
+                self.process_error(Box::new(NError::new(ERROR_CONNECTION_CLOSED)), subs)
+                    .await;
+                return;
+            }
             let mut buf = &buf[0..n];
             loop {
                 let r = parser.parse(&buf[..]);
@@ -152,6 +158,11 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
     }
     async fn send_message(&self, sub: &Subscription, pub_arg: &PubArg<'_>) -> std::io::Result<()> {
         let mut writer = sub.msg_sender.lock().await;
+        if true {
+            println!("send message, subject={},message={}", sub.subject, unsafe {
+                std::str::from_utf8_unchecked(pub_arg.msg)
+            },)
+        }
         use tokio::io::BufWriter;
         writer.writer.write("MSG ".as_bytes()).await?;
         writer.writer.write(sub.subject.as_bytes()).await?;
