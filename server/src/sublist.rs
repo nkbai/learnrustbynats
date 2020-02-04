@@ -129,12 +129,19 @@ impl TrieSubList {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::Mutex;
+
     #[test]
     fn test() {}
+    /*
+    因为TcpStream的缘故,他只能在async环境中创建
+    */
+    #[tokio::main]
     #[test]
-    fn test_insert() {
+    async fn test_insert() {
         let mut sl = TrieSubList::new();
         let mut sub = Arc::new(Subscription {
+            msg_sender: crate::client::new_test_tcp_writer(),
             subject: "a.b.c".to_string(),
             queue: None,
             sid: "1".to_string(),

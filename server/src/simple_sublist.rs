@@ -1,7 +1,9 @@
+use crate::client::ClientMessageSender;
 use crate::error::{NError, Result, ERROR_SUBSCRIBTION_NOT_FOUND};
 use bitflags::_core::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /**
 为了讲解方便,考虑到Trie的实现以及Cache的实现都是很琐碎,
@@ -9,11 +11,27 @@ use std::sync::Arc;
 这样就是简单的字符串查找了. 使用map即可.
 但是为了后续的扩展性呢,我会定义SubListTrait,这样方便后续实现Trie树
 */
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Subscription {
+    pub msg_sender: Arc<Mutex<ClientMessageSender>>,
     pub subject: String,
     pub queue: Option<String>,
     pub sid: String,
+}
+impl Subscription {
+    pub fn new(
+        subject: &str,
+        queue: Option<&str>,
+        sid: &str,
+        msg_sender: Arc<Mutex<ClientMessageSender>>,
+    ) -> Self {
+        Self {
+            subject: subject.to_string(),
+            queue: queue.map(|s| s.to_string()),
+            sid: sid.to_string(),
+            msg_sender,
+        }
+    }
 }
 #[derive(Debug, Default)]
 pub struct SubResult {
@@ -60,7 +78,7 @@ pub trait SubListTrait {
     fn match_subject(&mut self, subject: &str) -> Result<ArcSubResult>;
 }
 #[derive(Debug, Default)]
-struct SimpleSubList {
+pub struct SimpleSubList {
     subs: HashMap<String, BTreeSet<ArcSubscriptionWrapper>>,
     qsubs: HashMap<String, HashMap<String, BTreeSet<ArcSubscriptionWrapper>>>,
 }
@@ -88,16 +106,25 @@ impl SubListTrait for SimpleSubList {
         if let Some(ref q) = sub.queue {
             if let Some(subs) = self.qsubs.get_mut(&sub.subject) {
                 if let Some(qsubs) = subs.get_mut(q) {
-                    qsubs.remove(&ArcSubscriptionWrapper(sub));
+                    qsubs.remove(&ArcSubscriptionWrapper(sub.clone()));
+                    if qsubs.is_empty() {
+                        subs.remove(q);
+                    }
                 } else {
                     return Err(NError::new(ERROR_SUBSCRIBTION_NOT_FOUND));
+                }
+                if subs.is_empty() {
+                    self.qsubs.remove(&sub.subject);
                 }
             } else {
                 return Err(NError::new(ERROR_SUBSCRIBTION_NOT_FOUND));
             }
         } else {
             if let Some(subs) = self.subs.get_mut(&sub.subject) {
-                subs.remove(&ArcSubscriptionWrapper(sub));
+                subs.remove(&ArcSubscriptionWrapper(sub.clone()));
+                if subs.is_empty() {
+                    self.subs.remove(&sub.subject);
+                }
             }
         }
         Ok(())
@@ -119,16 +146,108 @@ impl SubListTrait for SimpleSubList {
                 r.qsubs.push(v);
             }
         }
-        if r.is_empty() {
-            Err(NError::new(ERROR_SUBSCRIBTION_NOT_FOUND))
-        } else {
-            Ok(Arc::new(r))
-        }
+        Ok(Arc::new(r))
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::new_test_tcp_writer;
+
+    #[tokio::main]
     #[test]
-    fn test() {}
+    async fn test_match() {
+        let mut sl = SimpleSubList::default();
+        let mut subs = Vec::new();
+        let r = sl.match_subject("test").unwrap();
+        assert_eq!(r.subs.len(), 0);
+        assert_eq!(r.qsubs.len(), 0);
+        let sub = Arc::new(Subscription::new("test", None, "1", new_test_tcp_writer()));
+        subs.push(sub.clone());
+        let r = sl.insert(sub);
+        assert!(!r.is_err());
+        let r = sl.match_subject("test").unwrap();
+        assert_eq!(r.subs.len(), 1);
+        assert_eq!(r.qsubs.len(), 0);
+        let sub = Arc::new(Subscription::new("test", None, "1", new_test_tcp_writer()));
+        subs.push(sub.clone());
+        let r = sl.insert(sub);
+        assert!(!r.is_err());
+        let r = sl.match_subject("test").unwrap();
+        assert_eq!(r.subs.len(), 2);
+        assert_eq!(r.qsubs.len(), 0);
+        let sub = Arc::new(Subscription::new(
+            "test",
+            Some("q"),
+            "1",
+            new_test_tcp_writer(),
+        ));
+        subs.push(sub.clone());
+        let r = sl.insert(sub);
+        assert!(!r.is_err());
+        let r = sl.match_subject("test").unwrap();
+        assert_eq!(r.subs.len(), 2);
+        assert_eq!(r.qsubs.len(), 1);
+        let sub = Arc::new(Subscription::new(
+            "test",
+            Some("q"),
+            "1",
+            new_test_tcp_writer(),
+        ));
+        subs.push(sub.clone());
+        let r = sl.insert(sub);
+        assert!(!r.is_err());
+        let r = sl.match_subject("test").unwrap();
+        assert_eq!(r.subs.len(), 2);
+        assert_eq!(r.qsubs.len(), 1);
+
+        let sub = Arc::new(Subscription::new(
+            "test",
+            Some("q2"),
+            "1",
+            new_test_tcp_writer(),
+        ));
+        subs.push(sub.clone());
+        let r = sl.insert(sub);
+        assert!(!r.is_err());
+        let r = sl.match_subject("test").unwrap();
+        assert_eq!(r.subs.len(), 2);
+        assert_eq!(r.qsubs.len(), 2);
+
+        let s = subs.pop().unwrap();
+        let r = sl.remove(s);
+        assert!(!r.is_err());
+        let r = sl.match_subject("test").unwrap();
+        assert_eq!(r.subs.len(), 2);
+        assert_eq!(r.qsubs.len(), 1);
+
+        let s = subs.pop().unwrap();
+        let r = sl.remove(s);
+        assert!(!r.is_err());
+        let r = sl.match_subject("test").unwrap();
+        assert_eq!(r.subs.len(), 2);
+        assert_eq!(r.qsubs.len(), 1);
+
+        let s = subs.pop().unwrap();
+        let r = sl.remove(s);
+        assert!(!r.is_err());
+        let r = sl.match_subject("test").unwrap();
+        assert_eq!(r.subs.len(), 2);
+        assert_eq!(r.qsubs.len(), 0);
+
+        let s = subs.pop().unwrap();
+        let r = sl.remove(s);
+        assert!(!r.is_err());
+        let r = sl.match_subject("test").unwrap();
+        assert_eq!(r.subs.len(), 1);
+        assert_eq!(r.qsubs.len(), 0);
+
+        let s = subs.pop().unwrap();
+        let r = sl.remove(s);
+        assert!(!r.is_err());
+        let r = sl.match_subject("test").unwrap();
+        assert_eq!(r.subs.len(), 0);
+        assert_eq!(r.qsubs.len(), 0);
+    }
 }

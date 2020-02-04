@@ -5,6 +5,7 @@ pub const ERROR_PARSE: i32 = 1;
 pub const ERROR_MESSAGE_SIZE_TOO_LARGE: i32 = 2;
 pub const ERROR_INVALID_SUBJECT: i32 = 3;
 pub const ERROR_SUBSCRIBTION_NOT_FOUND: i32 = 4;
+pub const ERROR_UNKOWN_ERROR: i32 = 1000;
 #[derive(Debug)]
 pub struct NError {
     pub err_code: i32,

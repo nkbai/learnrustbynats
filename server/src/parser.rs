@@ -40,17 +40,17 @@ enum ParseState {
     OpMsgFull,
 }
 #[derive(Debug, PartialEq)]
-struct SubArg<'a> {
-    subject: &'a str, //为什么是str而不是String,就是为了避免内存分配,
-    sid: &'a str,
-    queue: Option<&'a str>,
+pub struct SubArg<'a> {
+    pub subject: &'a str, //为什么是str而不是String,就是为了避免内存分配,
+    pub sid: &'a str,
+    pub queue: Option<&'a str>,
 }
 #[derive(Debug, PartialEq)]
-struct PubArg<'a> {
-    subject: &'a str,
-    size_buf: &'a str, // 1024 字符串形式,避免后续再次转换
-    size: usize,       //1024 整数形式
-    msg: &'a [u8],
+pub struct PubArg<'a> {
+    pub subject: &'a str,
+    pub size_buf: &'a str, // 1024 字符串形式,避免后续再次转换
+    pub size: usize,       //1024 整数形式
+    pub msg: &'a [u8],
 }
 #[derive(Debug, PartialEq)]
 pub enum ParseResult<'a> {
@@ -71,6 +71,7 @@ pub struct Parser {
     //解析过程中受到新消息,那么 新消息的总长度是msg_total_len,已收到部分应该是msg_len
     msg_total_len: usize,
     msg_len: usize,
+    debug: bool,
 }
 
 impl Parser {
@@ -82,6 +83,7 @@ impl Parser {
             msg_buf: None,
             msg_total_len: 0,
             msg_len: 0,
+            debug: true,
         }
     }
     /**
@@ -94,6 +96,13 @@ impl Parser {
     {
         let mut b;
         let mut i = 0;
+        if self.debug {
+            println!(
+                "parse string:{},state={:?}",
+                unsafe { std::str::from_utf8_unchecked(buf) },
+                self.state
+            );
+        }
         while i < buf.len() {
             use ParseState::*;
             b = buf[i] as char;
@@ -286,6 +295,11 @@ impl Parser {
             msg,
         };
         Ok(ParseResult::Pub(pub_arg))
+    }
+    pub fn clear_msg_buf(&mut self) {
+        self.msg_buf = None;
+        self.msg_len = 0;
+        self.msg_total_len = 0;
     }
     //从接收到的pub消息中提前解析出来消息的长度
     fn get_message_size(&self) -> Result<usize> {
