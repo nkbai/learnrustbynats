@@ -3,16 +3,15 @@ use crate::parser::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::*;
-use tokio::io::{self, AsyncWrite, AsyncWriteExt};
-use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Mutex};
-type MessageHandler = Box<dyn Fn(&[u8]) -> Result<()> + Sync + Send>;
+
+//type MessageHandler = Box<dyn Fn(&[u8]) -> Result<()> + Sync + Send>;
 #[derive(Debug)]
 pub struct Client {
     addr: String,
     writer: Arc<Mutex<WriteHalf<TcpStream>>>,
-    stop: oneshot::Sender<()>,
+    pub stop: oneshot::Sender<()>,
     sid: u64,
     handler: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<Vec<u8>>>>>,
 }
@@ -44,53 +43,69 @@ impl Client {
         handler: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<Vec<u8>>>>>,
         writer: Arc<Mutex<WriteHalf<TcpStream>>>,
     ) {
-        use tokio::io::AsyncWrite;
-        use tokio::io::AsyncWriteExt;
+        use futures::*;
         let mut buf = [0 as u8; 512];
         let mut parser = Parser::new();
+        let mut stop = stop.fuse();
+        //        let mut _r: Result<usize>;
         loop {
-            let r = reader.read(&mut buf[..]).await;
-            if r.is_err() {
-                println!("receive_task err {:?}", r.unwrap_err());
-                return;
-            }
-            let r = r.unwrap();
-            if r == 0 {
-                println!("connection closed");
-                return;
-            }
-            let mut buf = &buf[0..r];
-            println!("read buf len={},buf={}", r, unsafe {
-                std::str::from_utf8_unchecked(buf)
-            });
-            loop {
-                let r = parser.parse(buf);
-                if r.is_err() {
-                    println!("msg error:{}", r.unwrap_err());
-                    writer.lock().await.shutdown().await;
+            select! {
+                _=stop=>{
+                println!("server stoped.");
+                let r=writer.lock().await.shutdown().await;
+                 if r.is_err() {
+                    println!("receive_task err {:?}", r.unwrap_err());
                     return;
                 }
-                let (r, n) = r.unwrap();
-                if let ParseResult::MsgArg(ref msg) = r {
-                    if let Some(handler) = handler.lock().await.get(msg.subject) {
-                        let r = handler.send(msg.msg.to_vec());
+                return;
+                },
+                  r = reader.read(&mut buf[..]).fuse()=>{
+                if r.is_err() {
+                    println!("receive_task err {:?}", r.unwrap_err());
+                    return;
+                }
+                let r = r.unwrap();
+                if r == 0 {
+                    println!("connection closed");
+                    return;
+                }
+                let mut buf = &buf[0..r];
+                println!("read buf len={},buf={}", r, unsafe {
+                    std::str::from_utf8_unchecked(buf)
+                });
+                loop {
+                    let r = parser.parse(buf);
+                    if r.is_err() {
+                        println!("msg error:{}", r.unwrap_err());
+                        let r=writer.lock().await.shutdown().await;
                         if r.is_err() {
-                            println!("handler error {}", r.unwrap_err());
-                            return;
+                            println!("shutdown err {:?}",r);
                         }
-                    } else {
-                        println!("receive msg on subject {}, not found receiver", msg.subject);
+                        return;
                     }
-                    parser.clear_msg_buf();
-                } else if ParseResult::NoMsg == r {
-                    break; //NoMsg
+                    let (r, n) = r.unwrap();
+                    if let ParseResult::MsgArg(ref msg) = r {
+                        if let Some(handler) = handler.lock().await.get(msg.subject) {
+                            let r = handler.send(msg.msg.to_vec());
+                            if r.is_err() {
+                                println!("handler error {}", r.unwrap_err());
+                                return;
+                            }
+                        } else {
+                            println!("receive msg on subject {}, not found receiver", msg.subject);
+                        }
+                        parser.clear_msg_buf();
+                    } else if ParseResult::NoMsg == r {
+                        break; //NoMsg
+                    }
+                    println!("n={},buf len={}", n, buf.len());
+                    if n == buf.len() {
+                        break;
+                    }
+                    buf = &buf[n..];
                 }
-                println!("n={},buf len={}", n, buf.len());
-                if n == buf.len() {
-                    break;
-                }
-                buf = &buf[n..];
             }
+                 }
         }
     }
     //pub消息格式为PUB subject size\r\n{message}

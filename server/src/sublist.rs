@@ -72,7 +72,9 @@ impl TrieSubList {
             root: Default::default(),
         }
     }
-    pub fn insert(&mut self, sub: Arc<Subscription>) -> Result<()> {
+}
+impl SubListTrait for TrieSubList {
+    fn insert(&mut self, sub: Arc<Subscription>) -> Result<()> {
         let mut l = &mut self.root;
         let mut n = &mut Box::new(TrieNode::new());
         for token in sub.subject.split(".") {
@@ -119,18 +121,16 @@ impl TrieSubList {
         }
         Ok(())
     }
-    pub fn remove(&mut self, sub: Arc<Subscription>) -> Result<()> {
+    fn remove(&mut self, _sub: Arc<Subscription>) -> Result<()> {
         Err(NError::new(ERROR_INVALID_SUBJECT))
     }
-    pub fn match_subject(&mut self, subject: &str) -> Result<ArcSubResult> {
+    fn match_subject(&mut self, _subject: &str) -> Result<ArcSubResult> {
         Err(NError::new(ERROR_INVALID_SUBJECT))
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::Mutex;
-
     #[test]
     fn test() {}
     /*
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     async fn test_insert() {
         let mut sl = TrieSubList::new();
-        let mut sub = Arc::new(Subscription {
+        let sub = Arc::new(Subscription {
             msg_sender: crate::client::new_test_tcp_writer(),
             subject: "a.b.c".to_string(),
             queue: None,
@@ -193,6 +193,6 @@ mod tests {
         }
 
         assert_eq!(*cache.get(&"banana").unwrap(), 6);
-        for (k, v) in cache.iter_mut() {}
+        //        for (k, v) in cache.iter_mut() {}
     }
 }

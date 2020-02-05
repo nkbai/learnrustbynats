@@ -1,6 +1,5 @@
 use crate::client::*;
 use crate::simple_sublist::SubListTrait;
-use bitflags::_core::sync::atomic::AtomicUsize;
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
@@ -24,7 +23,7 @@ impl<T: SubListTrait + Send + 'static> Server<T> {
         let mut listener = TcpListener::bind(addr).await?;
         println!("listenging on:{}", addr);
         loop {
-            let (mut socket, _) = listener.accept().await?;
+            let (socket, _) = listener.accept().await?;
             self.new_client(socket).await;
         }
     }
@@ -38,4 +37,10 @@ impl<T: SubListTrait + Send + 'static> Server<T> {
         let mut state = self.state.lock().await;
         state.clients.insert(cid, c);
     }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test() {}
 }

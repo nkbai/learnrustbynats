@@ -6,8 +6,7 @@ use rand::{RngCore, SeedableRng};
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::io::{BufWriter, ReadHalf, WriteHalf};
+use tokio::io::*;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
@@ -33,7 +32,7 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         conn: TcpStream,
     ) -> Arc<Mutex<ClientMessageSender>> {
         println!("process new connection id={}", cid);
-        let (mut reader, writer) = tokio::io::split(conn);
+        let (reader, writer) = tokio::io::split(conn);
         let msg_sender = Arc::new(Mutex::new(ClientMessageSender::new(writer)));
         let c = Client {
             srv,
@@ -46,8 +45,6 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         return msg_sender;
     }
     async fn client_task(self, mut reader: ReadHalf<TcpStream>) {
-        use futures::StreamExt;
-        use tokio::io::{AsyncRead, AsyncReadExt};
         let mut subs = HashMap::new();
         let mut parser = Parser::new();
         let mut buf = [0; 1024];
@@ -116,13 +113,16 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
             drop(srv); //提前释放
         }
         let mut writer = self.msg_sender.lock().await;
-        writer.writer.shutdown().await;
+        let r = writer.writer.shutdown().await;
+        if r.is_err() {
+            println!("shutdown err {:?}", r);
+        }
     }
     async fn process_sub(
         &self,
         sub: &SubArg<'_>,
         subs: &mut HashMap<String, ArcSubscription>,
-    ) -> Result<()> {
+    ) -> crate::error::Result<()> {
         let s = Subscription {
             msg_sender: self.msg_sender.clone(),
             subject: sub.subject.to_string(),
@@ -134,7 +134,7 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         let mut srv = self.srv.lock().await;
         srv.sublist.insert(s)
     }
-    async fn process_pub(&self, pub_arg: &PubArg<'_>) -> Result<()> {
+    async fn process_pub(&self, pub_arg: &PubArg<'_>) -> crate::error::Result<()> {
         let subject = pub_arg.subject;
         let s = self.srv.lock().await.sublist.match_subject(&subject)?;
         for sub in s.subs.iter() {
@@ -150,12 +150,21 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
             println!("subject={},qsubs len={}", subject, qsub.len());
             let pos = r.next_u32() as usize % qsub.len();
             let sub = qsub.get(pos).expect("qsub must have at least one element");
-            self.send_message(sub.as_ref(), &pub_arg)
+            let r = self
+                .send_message(sub.as_ref(), &pub_arg)
                 .await
                 .map_err(|_| NError::new(ERROR_UNKOWN_ERROR));
+            if r.is_err() {
+                println!("send message err {:?}", r);
+            }
         }
         Ok(())
     }
+    ///消息格式
+    ///```
+    /// MSG <subject> <sid> <size>\r\n
+    /// <message>\r\n
+    /// ```
     async fn send_message(&self, sub: &Subscription, pub_arg: &PubArg<'_>) -> std::io::Result<()> {
         let mut writer = sub.msg_sender.lock().await;
         if true {
@@ -163,7 +172,6 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
                 std::str::from_utf8_unchecked(pub_arg.msg)
             },)
         }
-        use tokio::io::BufWriter;
         writer.writer.write("MSG ".as_bytes()).await?;
         writer.writer.write(sub.subject.as_bytes()).await?;
         writer.writer.write(" ".as_bytes()).await?;
@@ -179,7 +187,7 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
 
 pub fn new_test_tcp_writer() -> Arc<Mutex<ClientMessageSender>> {
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = l.local_addr().unwrap().port();
+    //    let port = l.local_addr().unwrap().port();
     let conn = std::net::TcpStream::connect(l.local_addr().unwrap()).unwrap();
     let conn = tokio::net::TcpStream::from_std(conn).unwrap();
     let (_, writer) = tokio::io::split(conn);

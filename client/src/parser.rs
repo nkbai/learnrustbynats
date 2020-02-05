@@ -150,7 +150,7 @@ impl Parser {
                         parse_error!();
                     }
                 },
-                _ => panic!("unkown state {:?}", self.state),
+                //                _ => panic!("unkown state {:?}", self.state),
             }
             i += 1;
         }
@@ -200,7 +200,7 @@ impl Parser {
             arg_buf[arg_len] = s;
             arg_len += 1;
         }
-        let mut msg_arg = MsgArg {
+        let msg_arg = MsgArg {
             subject: arg_buf[0],
             size: self.msg_total_len,
             sid: arg_buf[1],

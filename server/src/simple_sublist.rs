@@ -73,8 +73,8 @@ impl std::cmp::Ord for ArcSubscriptionWrapper {
 }
 pub type ArcSubResult = Arc<SubResult>;
 pub trait SubListTrait {
-    fn insert(&mut self, sub: Arc<Subscription>) -> Result<()>;
-    fn remove(&mut self, sub: Arc<Subscription>) -> Result<()>;
+    fn insert(&mut self, sub: ArcSubscription) -> Result<()>;
+    fn remove(&mut self, sub: ArcSubscription) -> Result<()>;
     fn match_subject(&mut self, subject: &str) -> Result<ArcSubResult>;
 }
 #[derive(Debug, Default)]

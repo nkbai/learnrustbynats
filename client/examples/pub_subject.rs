@@ -10,5 +10,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         c.pub_message("test", format!("hello{}", i).as_bytes())
             .await?;
     }
+    println!("close connection");
+    c.stop.send(());
     Ok(())
 }

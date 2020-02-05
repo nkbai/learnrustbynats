@@ -16,5 +16,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             std::str::from_utf8_unchecked(r.as_slice())
         });
     }
+    println!("close connection");
+    c.stop.send(());
     Ok(())
 }
