@@ -101,7 +101,7 @@ impl SubResultCache {
                 if let Some(ref q) = sub.queue {
                     let mut found = false;
                     for (pos, subs) in result.qsubs.iter().enumerate() {
-                        if subs.get(0).unwrap().subject.as_str() == sub.subject.as_str() {
+                        if subs.get(0).unwrap().queue.as_ref().unwrap().as_str() == q.as_str() {
                             r.qsubs[pos].push(sub.clone());
                             found = true;
                         }
@@ -128,18 +128,29 @@ impl SubResultCache {
                 r.qsubs = result.qsubs.clone();
                 if let Some(ref q) = sub.queue {
                     for (pos, subs) in result.qsubs.iter().enumerate() {
-                        if subs.get(0).unwrap().subject.as_str() == sub.subject.as_str() {
+                        if subs.get(0).unwrap().queue.as_ref().unwrap().as_str() == q.as_str() {
                             for t in subs.iter().enumerate() {
                                 if std::ptr::eq(t.1.as_ref(), sub.as_ref()) {
                                     r.qsubs[pos].swap_remove(t.0);
                                     break;
                                 }
                             }
+                            if r.qsubs[pos].len() == 0 {
+                                r.qsubs.swap_remove(pos);
+                            }
                             break;
                         }
                     }
                 } else {
-                    r.psubs.push(sub.clone());
+                    let pos = r
+                        .psubs
+                        .iter()
+                        .position(|it| std::ptr::eq(it.as_ref(), sub.as_ref()));
+                    if let Some(pos) = pos {
+                        r.psubs.swap_remove(pos);
+                    } else {
+                        println!(" not found {:?}", sub);
+                    }
                 }
                 v.push((r, subject.clone()));
             }
@@ -149,7 +160,7 @@ impl SubResultCache {
         }
     }
     fn get(&mut self, subject: &str) -> Option<ArcSubResult> {
-        return Some(ArcSubResult::default());
+        //        return Some(ArcSubResult::default());
         //todo 由于lru cache 自身问题,等修复后就不需要copy了
         self.cache.get(&subject.to_string()).map(|r| Arc::clone(r))
     }
@@ -286,7 +297,7 @@ impl SubListTrait for TrieSubList {
     //需要查找到订阅了a.> a.*.c a.b.* a.b.c和> 这些可能匹配的节点
     //并且他们不应该在同一个queue中,就是订阅了a.*.c 和 a.b.c就算是他们有相同的queue,也不能做负载均衡.
     fn match_subject(&mut self, subject: &str) -> ArcSubResult {
-        return Arc::new(SubResult::new());
+        //        return Arc::new(SubResult::new());
         if let Some(r) = self.cache.get(subject) {
             return r;
         }
@@ -372,14 +383,14 @@ impl TrieSubList {
             return false;
         }
         let n = n.unwrap();
-        if n.next.is_none() {
-            return false;
-        }
         if is_last {
             if !Self::remove_sub(n.as_mut(), sub.clone()) {
                 return false;
             }
         } else {
+            if n.next.is_none() {
+                return false;
+            }
             let l = n.next.as_mut().unwrap();
             //如果成功移除了,就要考虑我这一层是否是空的了.
             if !Self::remove_internal(l.as_mut(), tokens, sub) {
@@ -487,7 +498,7 @@ fn split_subject<'a>(subject: &'a str) -> Split<'a> {
 impl<'a> std::iter::Iterator for Split<'a> {
     type Item = &'a str;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.pos >= self.buf.len() {
+        if self.pos > self.buf.len() {
             return None;
         }
         let start = self.pos;
@@ -513,12 +524,14 @@ fn test_split() {
     let v = vec!["", "", "a", "b", "c"];
     let r: Vec<_> = split_subject("..a.b.c").collect();
     assert_eq!(v, r);
+    let v = vec!["a", "b", "c", ""];
+    let r: Vec<_> = split_subject("a.b.c.").collect();
+    assert_eq!(v, r);
 }
 /// matchLiteral is used to test literal subjects, those that do not have any
 /// wildcards, with a target subject. This is used in the cache layer.
 /// 判断a.b.c和a.*.c时否匹配
 fn match_literal(literal: &str, subject: &str) -> bool {
-    let mut li = 0;
     let mut literal_iter = split_subject(literal).peekable();
     let mut subject_iter = split_subject(subject).peekable();
 
@@ -538,6 +551,7 @@ fn match_literal(literal: &str, subject: &str) -> bool {
         if subject == ">" {
             return true;
         }
+        return false;
     }
     subject_iter.peek().is_none()
 }
@@ -788,6 +802,7 @@ mod tests {
         let _ = s.insert(sub2.clone());
         let r = s.match_subject(subject);
         verify_len(r.psubs.as_slice(), 0);
+        println!("qsubs={:?}", r.qsubs);
         verify_qlen(&r.qsubs, 2);
         verify_len(r.qsubs[0].as_slice(), 1);
         verify_len(r.qsubs[1].as_slice(), 1);
@@ -893,13 +908,13 @@ mod benchmark {
     }
     use lazy_static::lazy_static;
     lazy_static! {
-        static ref test_subs_collect: Vec<ArcSubscription> = { create_test_subs() };
+        static ref TEST_SUBS_COLLECT: Vec<ArcSubscription> = { create_test_subs() };
     }
     #[bench]
     fn benchmark_sublist_insert(b: &mut Bencher) {
         //为什么go版本的insert只需要300ns,我这个需要3000ns,慢了一个数量级
         let mut s = TrieSubList::new();
-        let subs = &test_subs_collect;
+        let subs = &TEST_SUBS_COLLECT;
         let l = subs.len();
         let mut i = 0;
         //        println!("subs len={}", l);
@@ -926,13 +941,13 @@ mod benchmark {
             let _ = s.match_subject("apcera.continuum");
         })
     }
-    #[test]
-    fn test_match() {
-        let mut s = get_test_sublist();
-        for i in 0..10 {
-            let _ = s.match_subject("apcera.continuum.component");
-        }
-    }
+    //    #[test]
+    //    fn test_match() {
+    //        let mut s = get_test_sublist();
+    //        for i in 0..10 {
+    //            let _ = s.match_subject("apcera.continuum.component");
+    //        }
+    //    }
     #[bench]
     fn benchmark_match_threetokens(b: &mut Bencher) {
         let mut s = get_test_sublist();

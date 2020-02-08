@@ -171,7 +171,7 @@ pub mod test_helper {
     use super::*;
     use lazy_static::lazy_static;
     lazy_static! {
-        static ref sender: Arc<Mutex<ClientMessageSender>> = {
+        static ref SENDER: Arc<Mutex<ClientMessageSender>> = {
            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         //    let port = l.local_addr().unwrap().port();
         let conn = std::net::TcpStream::connect(l.local_addr().unwrap()).unwrap();
@@ -188,7 +188,7 @@ pub mod test_helper {
             let conn = tokio::net::TcpStream::from_std(conn).unwrap();
             let (_, writer) = tokio::io::split(conn);
             println!("send start");
-            tx.send(writer);
+            let _=tx.send(writer);
             println!("send complete")
         });
         let writer = rx.recv().unwrap();
@@ -197,7 +197,7 @@ pub mod test_helper {
     }
     #[cfg(test)]
     pub fn new_test_tcp_writer() -> Arc<Mutex<ClientMessageSender>> {
-        sender.clone()
+        SENDER.clone()
     }
 }
 #[cfg(test)]
