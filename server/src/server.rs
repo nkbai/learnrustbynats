@@ -18,24 +18,24 @@ pub struct ServerState<T: SubListTrait> {
 }
 
 impl<T: SubListTrait + Send + 'static> Server<T> {
-    pub async fn start(&self) -> Result<(), Box<dyn Error>> {
-        let addr = "0.0.0.0:4222";
+    pub async fn start(self) -> Result<(), Box<dyn Error>> {
+        let addr = "127.0.0.1:4222";
         let mut listener = TcpListener::bind(addr).await?;
-        println!("listenging on:{}", addr);
+        //go func(){}
         loop {
-            let (socket, _) = listener.accept().await?;
-            self.new_client(socket).await;
+            let (conn, _) = listener.accept().await?;
+            self.new_client(conn).await;
         }
     }
     async fn new_client(&self, conn: TcpStream) {
+        let state = self.state.clone();
         let cid = {
-            let mut state = self.state.lock().await;
+            let mut state = state.lock().await;
             state.gen_cid += 1;
             state.gen_cid
         };
-        let c = Client::process_connection(cid, self.state.clone(), conn);
-        let mut state = self.state.lock().await;
-        state.clients.insert(cid, c);
+        let c = Client::process_connection(cid, state, conn);
+        self.state.lock().await.clients.insert(cid, c);
     }
 }
 

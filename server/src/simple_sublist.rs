@@ -35,12 +35,20 @@ impl Subscription {
 }
 #[derive(Debug, Default)]
 pub struct SubResult {
-    pub subs: Vec<ArcSubscription>,
+    pub psubs: Vec<ArcSubscription>,
     pub qsubs: Vec<Vec<ArcSubscription>>,
 }
 impl SubResult {
-    pub fn is_empty(&self) -> bool {
-        self.subs.len() == 0 && self.qsubs.len() == 0
+    pub(crate) fn new() -> Self {
+        Self {
+            qsubs: Vec::new(),
+            psubs: Vec::new(),
+        }
+    }
+}
+impl SubResult {
+    fn is_empty(&self) -> bool {
+        self.psubs.len() == 0 && self.qsubs.len() == 0
     }
 }
 pub type ArcSubscription = Arc<Subscription>;
@@ -48,7 +56,7 @@ pub type ArcSubscription = Arc<Subscription>;
 因为孤儿原则,所以必须单独定义ArcSubscription
 */
 #[derive(Debug, Clone)]
-pub struct ArcSubscriptionWrapper(ArcSubscription);
+pub(crate) struct ArcSubscriptionWrapper(pub ArcSubscription);
 impl std::cmp::PartialEq for ArcSubscriptionWrapper {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
@@ -75,7 +83,7 @@ pub type ArcSubResult = Arc<SubResult>;
 pub trait SubListTrait {
     fn insert(&mut self, sub: ArcSubscription) -> Result<()>;
     fn remove(&mut self, sub: ArcSubscription) -> Result<()>;
-    fn match_subject(&mut self, subject: &str) -> Result<ArcSubResult>;
+    fn match_subject(&mut self, subject: &str) -> ArcSubResult;
 }
 #[derive(Debug, Default)]
 pub struct SimpleSubList {
@@ -130,11 +138,11 @@ impl SubListTrait for SimpleSubList {
         Ok(())
     }
 
-    fn match_subject(&mut self, subject: &str) -> Result<ArcSubResult> {
+    fn match_subject(&mut self, subject: &str) -> ArcSubResult {
         let mut r = SubResult::default();
         if let Some(subs) = self.subs.get(subject) {
             for s in subs {
-                r.subs.push(s.0.clone());
+                r.psubs.push(s.0.clone());
             }
         }
         if let Some(qsubs) = self.qsubs.get(subject) {
@@ -146,7 +154,7 @@ impl SubListTrait for SimpleSubList {
                 r.qsubs.push(v);
             }
         }
-        Ok(Arc::new(r))
+        Arc::new(r)
     }
 }
 
@@ -155,27 +163,26 @@ mod tests {
     use super::*;
     use crate::client::new_test_tcp_writer;
 
-    #[tokio::main]
     #[test]
-    async fn test_match() {
+    fn test_match() {
         let mut sl = SimpleSubList::default();
         let mut subs = Vec::new();
-        let r = sl.match_subject("test").unwrap();
-        assert_eq!(r.subs.len(), 0);
+        let r = sl.match_subject("test");
+        assert_eq!(r.psubs.len(), 0);
         assert_eq!(r.qsubs.len(), 0);
         let sub = Arc::new(Subscription::new("test", None, "1", new_test_tcp_writer()));
         subs.push(sub.clone());
         let r = sl.insert(sub);
         assert!(!r.is_err());
-        let r = sl.match_subject("test").unwrap();
-        assert_eq!(r.subs.len(), 1);
+        let r = sl.match_subject("test");
+        assert_eq!(r.psubs.len(), 1);
         assert_eq!(r.qsubs.len(), 0);
         let sub = Arc::new(Subscription::new("test", None, "1", new_test_tcp_writer()));
         subs.push(sub.clone());
         let r = sl.insert(sub);
         assert!(!r.is_err());
-        let r = sl.match_subject("test").unwrap();
-        assert_eq!(r.subs.len(), 2);
+        let r = sl.match_subject("test");
+        assert_eq!(r.psubs.len(), 2);
         assert_eq!(r.qsubs.len(), 0);
         let sub = Arc::new(Subscription::new(
             "test",
@@ -186,8 +193,8 @@ mod tests {
         subs.push(sub.clone());
         let r = sl.insert(sub);
         assert!(!r.is_err());
-        let r = sl.match_subject("test").unwrap();
-        assert_eq!(r.subs.len(), 2);
+        let r = sl.match_subject("test");
+        assert_eq!(r.psubs.len(), 2);
         assert_eq!(r.qsubs.len(), 1);
         let sub = Arc::new(Subscription::new(
             "test",
@@ -198,8 +205,8 @@ mod tests {
         subs.push(sub.clone());
         let r = sl.insert(sub);
         assert!(!r.is_err());
-        let r = sl.match_subject("test").unwrap();
-        assert_eq!(r.subs.len(), 2);
+        let r = sl.match_subject("test");
+        assert_eq!(r.psubs.len(), 2);
         assert_eq!(r.qsubs.len(), 1);
 
         let sub = Arc::new(Subscription::new(
@@ -211,43 +218,43 @@ mod tests {
         subs.push(sub.clone());
         let r = sl.insert(sub);
         assert!(!r.is_err());
-        let r = sl.match_subject("test").unwrap();
-        assert_eq!(r.subs.len(), 2);
+        let r = sl.match_subject("test");
+        assert_eq!(r.psubs.len(), 2);
         assert_eq!(r.qsubs.len(), 2);
 
         let s = subs.pop().unwrap();
         let r = sl.remove(s);
         assert!(!r.is_err());
-        let r = sl.match_subject("test").unwrap();
-        assert_eq!(r.subs.len(), 2);
+        let r = sl.match_subject("test");
+        assert_eq!(r.psubs.len(), 2);
         assert_eq!(r.qsubs.len(), 1);
 
         let s = subs.pop().unwrap();
         let r = sl.remove(s);
         assert!(!r.is_err());
-        let r = sl.match_subject("test").unwrap();
-        assert_eq!(r.subs.len(), 2);
+        let r = sl.match_subject("test");
+        assert_eq!(r.psubs.len(), 2);
         assert_eq!(r.qsubs.len(), 1);
 
         let s = subs.pop().unwrap();
         let r = sl.remove(s);
         assert!(!r.is_err());
-        let r = sl.match_subject("test").unwrap();
-        assert_eq!(r.subs.len(), 2);
+        let r = sl.match_subject("test");
+        assert_eq!(r.psubs.len(), 2);
         assert_eq!(r.qsubs.len(), 0);
 
         let s = subs.pop().unwrap();
         let r = sl.remove(s);
         assert!(!r.is_err());
-        let r = sl.match_subject("test").unwrap();
-        assert_eq!(r.subs.len(), 1);
+        let r = sl.match_subject("test");
+        assert_eq!(r.psubs.len(), 1);
         assert_eq!(r.qsubs.len(), 0);
 
         let s = subs.pop().unwrap();
         let r = sl.remove(s);
         assert!(!r.is_err());
-        let r = sl.match_subject("test").unwrap();
-        assert_eq!(r.subs.len(), 0);
+        let r = sl.match_subject("test");
+        assert_eq!(r.psubs.len(), 0);
         assert_eq!(r.qsubs.len(), 0);
     }
 }

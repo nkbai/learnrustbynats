@@ -5,7 +5,7 @@ use crate::simple_sublist::{ArcSubscription, SubListTrait, Subscription};
 use rand::{RngCore, SeedableRng};
 use std::collections::HashMap;
 use std::error::Error;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 use tokio::io::*;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -31,91 +31,81 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         srv: Arc<Mutex<ServerState<T>>>,
         conn: TcpStream,
     ) -> Arc<Mutex<ClientMessageSender>> {
-        println!("process new connection id={}", cid);
         let (reader, writer) = tokio::io::split(conn);
         let msg_sender = Arc::new(Mutex::new(ClientMessageSender::new(writer)));
         let c = Client {
-            srv,
+            srv: srv,
             cid,
             msg_sender: msg_sender.clone(),
         };
-        tokio::spawn(async move {
-            c.client_task(reader).await;
-        });
-        return msg_sender;
+        tokio::spawn(Client::client_task(c, reader));
+        msg_sender
     }
     async fn client_task(self, mut reader: ReadHalf<TcpStream>) {
-        let mut subs = HashMap::new();
-        let mut parser = Parser::new();
         let mut buf = [0; 1024];
+        let mut parser = Parser::new();
+        let mut subs = HashMap::new();
         loop {
-            let n = reader.read(&mut buf).await;
-            if n.is_err() {
-                self.process_error(Box::new(n.unwrap_err()), subs).await;
+            let r = reader.read(&mut buf[..]).await;
+            if r.is_err() {
+                let e = r.unwrap_err();
+                self.process_error(e, subs).await;
                 return;
             }
-            let n = n.unwrap();
+            let r = r.unwrap();
+            let n = r;
             if n == 0 {
-                //返回长度为0,说明连接关闭了,对方主动关闭
-                self.process_error(Box::new(NError::new(ERROR_CONNECTION_CLOSED)), subs)
+                self.process_error(NError::new(ERROR_CONNECTION_CLOSED), subs)
                     .await;
                 return;
             }
             let mut buf = &buf[0..n];
             loop {
                 let r = parser.parse(&buf[..]);
-                println!("client {} receive message {:?}", self.cid, r);
                 if r.is_err() {
-                    self.process_error(Box::new(r.unwrap_err()), subs).await;
+                    self.process_error(r.unwrap_err(), subs).await;
                     return;
                 }
-                use crate::parser::ParseResult::*;
-                let (r, n) = r.unwrap();
-                match r {
-                    NoMsg => {
-                        break; //没有读取到完整的消息,继续下一条
+                let (result, left) = r.unwrap();
+
+                match result {
+                    ParseResult::NoMsg => {
+                        break;
                     }
-                    Pub(pub_arg) => {
-                        let r = self.process_pub(&pub_arg).await;
-                        if r.is_err() {
-                            self.process_error(Box::new(r.unwrap_err()), subs).await;
+                    ParseResult::Sub(ref sub) => {
+                        if let Err(e) = self.process_sub(sub, &mut subs).await {
+                            self.process_error(e, subs).await;
+                            return;
+                        }
+                    }
+                    ParseResult::Pub(ref pub_arg) => {
+                        if let Err(e) = self.process_pub(pub_arg).await {
+                            self.process_error(e, subs).await;
                             return;
                         }
                         parser.clear_msg_buf();
                     }
-                    Sub(sub) => {
-                        let r = self.process_sub(&sub, &mut subs).await;
-                        if r.is_err() {
-                            self.process_error(r.unwrap_err(), subs).await;
-                            return;
-                        }
-                    }
                 }
-                if n == buf.len() {
+                if left == buf.len() {
                     break;
                 }
-                buf = &buf[n..];
+                buf = &buf[left..];
             }
         }
     }
     async fn process_error<E: Error>(&self, err: E, subs: HashMap<String, ArcSubscription>) {
         println!("client {} process err {:?}", self.cid, err);
         {
-            let mut srv = self.srv.lock().await;
-            for s in subs {
-                if let Err(e) = srv.sublist.remove(s.1.clone()) {
-                    println!(
-                        "client {} remove sub {} error {:?}",
-                        self.cid, &s.1.subject, e
-                    );
+            let sublist = &mut self.srv.lock().await.sublist;
+            for (_, sub) in subs {
+                if let Err(e) = sublist.remove(sub) {
+                    println!("client {} remove err {} ", self.cid, e);
                 }
             }
-            drop(srv); //提前释放
         }
-        let mut writer = self.msg_sender.lock().await;
-        let r = writer.writer.shutdown().await;
+        let r = self.msg_sender.lock().await.writer.shutdown().await;
         if r.is_err() {
-            println!("shutdown err {:?}", r);
+            println!("shutdown err {:?}", r.unwrap_err());
         }
     }
     async fn process_sub(
@@ -123,40 +113,37 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         sub: &SubArg<'_>,
         subs: &mut HashMap<String, ArcSubscription>,
     ) -> crate::error::Result<()> {
-        let s = Subscription {
-            msg_sender: self.msg_sender.clone(),
+        let sub = Subscription {
             subject: sub.subject.to_string(),
-            queue: sub.queue.map(|s| s.to_string()),
+            queue: sub.queue.map(|q| q.to_string()),
             sid: sub.sid.to_string(),
+            msg_sender: self.msg_sender.clone(),
         };
-        let s = Arc::new(s);
-        subs.insert(sub.subject.to_string(), s.clone());
-        let mut srv = self.srv.lock().await;
-        srv.sublist.insert(s)
+        let sub = Arc::new(sub);
+        subs.insert(sub.subject.clone(), sub.clone());
+        let sublist = &mut self.srv.lock().await.sublist;
+        sublist.insert(sub)?;
+        Ok(())
     }
     async fn process_pub(&self, pub_arg: &PubArg<'_>) -> crate::error::Result<()> {
-        let subject = pub_arg.subject;
-        let s = self.srv.lock().await.sublist.match_subject(&subject)?;
-        for sub in s.subs.iter() {
-            self.send_message(sub.as_ref(), &pub_arg)
+        let sub_result = {
+            let sub_list = &mut self.srv.lock().await.sublist;
+            sub_list.match_subject(pub_arg.subject)
+        };
+        for sub in sub_result.psubs.iter() {
+            self.send_message(sub.as_ref(), pub_arg)
                 .await
-                .map_err(|e| {
-                    println!("send message to client err {}", e);
-                    NError::new(ERROR_UNKOWN_ERROR)
-                })?;
+                .map_err(|_| NError::new(ERROR_CONNECTION_CLOSED))?;
         }
-        let mut r = rand::rngs::StdRng::from_entropy();
-        for qsub in s.qsubs.iter() {
-            println!("subject={},qsubs len={}", subject, qsub.len());
-            let pos = r.next_u32() as usize % qsub.len();
-            let sub = qsub.get(pos).expect("qsub must have at least one element");
-            let r = self
-                .send_message(sub.as_ref(), &pub_arg)
+        //qsubs 要考虑负载均衡问题
+        let mut rng = rand::rngs::StdRng::from_entropy();
+        for qsubs in sub_result.qsubs.iter() {
+            let n = rng.next_u32();
+            let n = n as usize % qsubs.len();
+            let sub = qsubs.get(n).unwrap();
+            self.send_message(sub.as_ref(), pub_arg)
                 .await
-                .map_err(|_| NError::new(ERROR_UNKOWN_ERROR));
-            if r.is_err() {
-                println!("send message err {:?}", r);
-            }
+                .map_err(|_| NError::new(ERROR_CONNECTION_CLOSED))?;
         }
         Ok(())
     }
@@ -166,36 +153,60 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
     /// <message>\r\n
     /// ```
     async fn send_message(&self, sub: &Subscription, pub_arg: &PubArg<'_>) -> std::io::Result<()> {
-        let mut writer = sub.msg_sender.lock().await;
-        if true {
-            println!("send message, subject={},message={}", sub.subject, unsafe {
-                std::str::from_utf8_unchecked(pub_arg.msg)
-            },)
-        }
-        writer.writer.write("MSG ".as_bytes()).await?;
-        writer.writer.write(sub.subject.as_bytes()).await?;
-        writer.writer.write(" ".as_bytes()).await?;
-        writer.writer.write(sub.sid.as_bytes()).await?;
-        writer.writer.write(" ".as_bytes()).await?;
-        writer.writer.write(pub_arg.size_buf.as_bytes()).await?;
-        writer.writer.write("\r\n".as_bytes()).await?;
-        writer.writer.write(pub_arg.msg).await?;
-        writer.writer.write("\r\n".as_bytes()).await?;
+        let writer = &mut sub.msg_sender.lock().await.writer;
+        writer.write("MSG ".as_bytes()).await?;
+        writer.write(sub.subject.as_bytes()).await?;
+        writer.write(" ".as_bytes()).await?;
+        writer.write(sub.sid.as_bytes()).await?;
+        writer.write(" ".as_bytes()).await?;
+        writer.write(pub_arg.size_buf.as_bytes()).await?;
+        writer.write("\r\n".as_bytes()).await?;
+        writer.write(pub_arg.msg).await?;
+        writer.write("\r\n".as_bytes()).await?;
         Ok(())
     }
 }
+#[cfg(test)]
+pub mod test_helper {
+    use super::*;
+    use lazy_static::lazy_static;
+    lazy_static! {
+        static ref sender: Arc<Mutex<ClientMessageSender>> = {
+           let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        //    let port = l.local_addr().unwrap().port();
+        let conn = std::net::TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
 
-pub fn new_test_tcp_writer() -> Arc<Mutex<ClientMessageSender>> {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    //    let port = l.local_addr().unwrap().port();
-    let conn = std::net::TcpStream::connect(l.local_addr().unwrap()).unwrap();
-    let conn = tokio::net::TcpStream::from_std(conn).unwrap();
-    let (_, writer) = tokio::io::split(conn);
-    return Arc::new(Mutex::new(ClientMessageSender::new(writer)));
+        let rt: tokio::runtime::Runtime = tokio::runtime::Builder::new()
+            .threaded_scheduler()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.spawn(async move {
+            println!("tokio spawned");
+            let conn = tokio::net::TcpStream::from_std(conn).unwrap();
+            let (_, writer) = tokio::io::split(conn);
+            println!("send start");
+            tx.send(writer);
+            println!("send complete")
+        });
+        let writer = rx.recv().unwrap();
+          Arc::new(Mutex::new(ClientMessageSender::new(writer)))
+        };
+    }
+    #[cfg(test)]
+    pub fn new_test_tcp_writer() -> Arc<Mutex<ClientMessageSender>> {
+        sender.clone()
+    }
 }
+#[cfg(test)]
+pub use test_helper::new_test_tcp_writer;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn test() {}
     #[test]
     fn test_rng() {
         for _ in 0..10 {

@@ -1,3 +1,4 @@
+#![feature(test)]
 use crate::server::Server;
 use crate::simple_sublist::SimpleSubList;
 use std::error::Error;
