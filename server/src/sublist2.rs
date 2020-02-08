@@ -1,5 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
+use lru_cache::LruCache;
+
 
 /**
 ### 核心的trie树
@@ -34,6 +36,7 @@ foo.dd
 */
 use crate::error::*;
 use crate::simple_sublist::*;
+use std::collections::hash_map::{RandomState, RawEntryMut};
 
 const PWC: u8 = '*' as u8;
 const FWC: u8 = '>' as u8;
@@ -77,12 +80,12 @@ impl TrieNode {
 }
 #[derive(Debug)]
 struct SubResultCache {
-    cache: lru::LruCache<String, ArcSubResult>,
+    cache: LruCache<String, ArcSubResult>,
 }
 impl SubResultCache {
     fn new(cache_size: usize) -> SubResultCache {
         Self {
-            cache: lru::LruCache::new(cache_size),
+            cache: LruCache::new(cache_size),
         }
     }
     /*
@@ -116,7 +119,7 @@ impl SubResultCache {
             }
         }
         for r in v {
-            self.cache.put(r.1, Arc::new(r.0));
+            self.cache.insert(r.1, Arc::new(r.0));
         }
     }
     fn remove(&mut self, sub: &ArcSubscription) {
@@ -156,41 +159,41 @@ impl SubResultCache {
             }
         }
         for r in v {
-            self.cache.put(r.1, Arc::new(r.0));
+            self.cache.insert(r.1, Arc::new(r.0));
         }
     }
-    fn get(&mut self, subject: &str) -> Option<ArcSubResult> {
+    fn get_mut(&mut self, subject: &str) -> Option<ArcSubResult> {
         //        return Some(ArcSubResult::default());
         //todo 由于lru cache 自身问题,等修复后就不需要copy了
-        self.cache.get(&subject.to_string()).map(|r| Arc::clone(r))
+        self.cache.get_mut(subject).map(|r| Arc::clone(r))
     }
     fn insert_result(&mut self, subject: &str, result: ArcSubResult) {
-        self.cache.put(subject.to_string(), result);
+        self.cache.insert(subject.to_string(), result);
     }
 }
 #[test]
 fn test_lru() {
-    use lru::LruCache;
+    use lru_cache::LruCache;
     let mut cache = LruCache::new(2);
-    cache.put("apple", 3);
-    cache.put("banana", 2);
-    assert_eq!(*cache.get(&"apple").unwrap(), 3);
-    assert_eq!(*cache.get(&"banana").unwrap(), 2);
-    assert!(cache.get(&"pear").is_none());
+    cache.insert("apple", 3);
+    cache.insert("banana", 2);
+    assert_eq!(*cache.get_mut(&"apple").unwrap(), 3);
+    assert_eq!(*cache.get_mut(&"banana").unwrap(), 2);
+    assert!(cache.get_mut(&"pear").is_none());
 
-    assert_eq!(cache.put("banana", 4), Some(2));
-    assert_eq!(cache.put("pear", 5), None);
+    assert_eq!(cache.insert("banana", 4), Some(2));
+    assert_eq!(cache.insert("pear", 5), None);
 
-    assert_eq!(*cache.get(&"pear").unwrap(), 5);
-    assert_eq!(*cache.get(&"banana").unwrap(), 4);
-    assert!(cache.get(&"apple").is_none());
+    assert_eq!(*cache.get_mut(&"pear").unwrap(), 5);
+    assert_eq!(*cache.get_mut(&"banana").unwrap(), 4);
+    assert!(cache.get_mut(&"apple").is_none());
 
     {
         let v = cache.get_mut(&"banana").unwrap();
         *v = 6;
     }
 
-    assert_eq!(*cache.get(&"banana").unwrap(), 6);
+    assert_eq!(*cache.get_mut(&"banana").unwrap(), 6);
 }
 impl Default for SubResultCache {
     fn default() -> Self {
@@ -235,32 +238,20 @@ impl SubListTrait for TrieSubList {
             let t = token.as_bytes()[0];
             match t {
                 PWC => {
-                    if l.pwc.is_none() {
-                        l.pwc = Some(Box::new(TrieNode::new()));
-                    }
-                    n = l.pwc.as_mut().unwrap();
+                    n = l.pwc.get_or_insert_with(|| Default::default());
                 }
                 FWC => {
-                    if l.fwc.is_none() {
-                        l.fwc = Some(Box::new(TrieNode::new()));
-                    }
-                    n = l.fwc.as_mut().unwrap();
+                    n = l.fwc.get_or_insert_with(|| Default::default());
                 }
                 _ => {
-                    n = l
-                        .nodes
-                        .entry(token.to_string())
-                        .or_insert(Box::new(TrieNode::new()));
+                    n = l.nodes.raw_entry_mut().from_key(token).or_insert_with(|| (token.to_string(), Default::default())).1;
                 }
             }
             let is_last = tokens.peek().is_none();
             if is_last {
                 break;
             }
-            if n.next.is_none() {
-                n.next = Some(Box::new(Level::default()));
-            }
-            l = n.next.as_mut().unwrap();
+            l = n.next.get_or_insert_with(|| Default::default());
         }
 
         if let Some(ref q) = sub.queue {
@@ -298,7 +289,7 @@ impl SubListTrait for TrieSubList {
     //并且他们不应该在同一个queue中,就是订阅了a.*.c 和 a.b.c就算是他们有相同的queue,也不能做负载均衡.
     fn match_subject(&mut self, subject: &str) -> ArcSubResult {
         //        return Arc::new(SubResult::new());
-        if let Some(r) = self.cache.get(subject) {
+        if let Some(r) = self.cache.get_mut(subject) {
             return r;
         }
         if !is_valid_literal_subject(subject) {
@@ -497,15 +488,18 @@ fn split_subject<'a>(subject: &'a str) -> Split<'a> {
 }
 impl<'a> std::iter::Iterator for Split<'a> {
     type Item = &'a str;
+
     fn next(&mut self) -> Option<Self::Item> {
         if self.pos > self.buf.len() {
             return None;
         }
         let start = self.pos;
+        let mut ptr = unsafe {self.buf.get_unchecked(self.pos)} as *const u8;
         while self.pos < self.buf.len() {
-            if self.buf[self.pos] == BTSEP {
+            if unsafe {*ptr} == BTSEP {
                 break;
             }
+            ptr = unsafe {ptr.offset(1)};
             self.pos += 1;
         }
         let str = unsafe { std::str::from_utf8_unchecked(&self.buf[start..self.pos]) };
@@ -907,11 +901,30 @@ mod benchmark {
         });
     }
     use lazy_static::lazy_static;
+    use bitflags::_core::hint::black_box;
     lazy_static! {
         static ref TEST_SUBS_COLLECT: Vec<ArcSubscription> = { create_test_subs() };
     }
+    #[test]
+    fn test2_sublist_insert() {
+        //为什么go版本的insert只需要300ns,我这个需要3000ns,慢了一个数量级
+        let mut s = TrieSubList::new();
+        let subs = &TEST_SUBS_COLLECT;
+        let l = subs.len();
+        let mut i = 0;
+        //        println!("subs len={}", l);
+        //        println!("subs={:?}", subs);
+        for _ in 0..1000000 {
+            let x = s.insert(subs[i % l].clone());
+            let _ = black_box(x);
+            //                        println!("i={}", i);
+            i += 1;
+        }
+
+        println!("count={}", i);
+    }
     #[bench]
-    fn benchmark1_sublist_insert(b: &mut Bencher) {
+    fn benchmark2_sublist_insert(b: &mut Bencher) {
         //为什么go版本的insert只需要300ns,我这个需要3000ns,慢了一个数量级
         let mut s = TrieSubList::new();
         let subs = &TEST_SUBS_COLLECT;
@@ -928,14 +941,14 @@ mod benchmark {
     }
 
     #[bench]
-    fn benchmark1_match_single_token(b: &mut Bencher) {
+    fn benchmark2_match_single_token(b: &mut Bencher) {
         let mut s = get_test_sublist();
         b.iter(|| {
             let _ = s.match_subject("apcera");
         })
     }
     #[bench]
-    fn benchmark1_match_twotokens(b: &mut Bencher) {
+    fn benchmark2_match_twotokens(b: &mut Bencher) {
         let mut s = get_test_sublist();
         b.iter(|| {
             let _ = s.match_subject("apcera.continuum");
@@ -949,14 +962,23 @@ mod benchmark {
     //        }
     //    }
     #[bench]
-    fn benchmark1_match_threetokens(b: &mut Bencher) {
+    fn benchmark2_match_threetokens(b: &mut Bencher) {
         let mut s = get_test_sublist();
         b.iter(|| {
             let _ = s.match_subject("apcera.continuum.component");
         })
     }
+    #[test]
+    fn test2_match_fourtokens() {
+        use test::black_box;
+        let mut s = get_test_sublist();
+        for _ in 0..10000000 {
+            let t = s.match_subject("apcera.continuum.component.router");
+            let _ = black_box(t);
+        }
+    }
     #[bench]
-    fn benchmark1_match_fourtokens(b: &mut Bencher) {
+    fn benchmark2_match_fourtokens(b: &mut Bencher) {
         let mut s = get_test_sublist();
         let _ = s.match_subject("apcera.continuum.component.router");
         let summary = b.bench(|b| {
@@ -967,21 +989,21 @@ mod benchmark {
         println!("summary={:?}", summary)
     }
     #[bench]
-    fn benchmark1_match_fivetokens2(b: &mut Bencher) {
+    fn benchmark2_match_fivetokens2(b: &mut Bencher) {
         let mut s = get_test_sublist();
         b.iter(|| {
             let _ = s.match_test("apcera.continuum.component.router.ZZZZ");
         })
     }
     #[bench]
-    fn benchmark1_match_fivetokens3(b: &mut Bencher) {
+    fn benchmark2_match_fivetokens3(b: &mut Bencher) {
         let mut s = get_test_sublist();
         b.iter(|| {
             let _ = s.match_test2("apcera.continuum.component.router.ZZZZ");
         })
     }
     #[bench]
-    fn benchmark1_match_fivetokens(b: &mut Bencher) {
+    fn benchmark2_match_fivetokens(b: &mut Bencher) {
         let mut s = get_test_sublist();
         b.iter(|| {
             let _ = s.match_subject("apcera.continuum.component.router.ZZZZ");
