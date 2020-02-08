@@ -198,7 +198,7 @@ impl Default for SubResultCache {
     }
 }
 #[derive(Debug, Default)]
-struct TrieSubList {
+pub struct TrieSubList {
     cache: SubResultCache,
     root: Level,
     d: ArcSubResult,
