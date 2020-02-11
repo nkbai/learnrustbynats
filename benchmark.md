@@ -79,3 +79,37 @@ Nats pub/sub stats: 377984 msgs/sec ~ 48382031.15402761/sec
    [10] 39396 msgs/sec ~ 5042791.16484889/sec (1000000 msgs)
    min 39396 | avg 39397 | max  39399 | stddev 1.140175425099138 msgs
 
+
+## 优化,msg_buf不再每次都分配
+但是这里有一个问题,这个buf什么时候释放呢?一直占着?并且不会缩小.
+只要连接不断开,就会一直占用.
+经测试影响不大,因此不应该使用
+Nats pub/sub stats: 377535 msgs/sec ~ 48324568.42183404/sec
+  Pub stats: 36157 msgs/sec ~ 4628158.023356056/sec
+  Sub stats: 343214 msgs/sec ~ 43931425.83803094/sec
+   [1] 34326 msgs/sec ~ 4393757.401522481/sec (100000 msgs)
+   [2] 34324 msgs/sec ~ 4393530.965829699/sec (100000 msgs)
+   [3] 34327 msgs/sec ~ 4393877.165810065/sec (100000 msgs)
+   [4] 34330 msgs/sec ~ 4394268.074840311/sec (100000 msgs)
+   [5] 34328 msgs/sec ~ 4394076.038781426/sec (100000 msgs)
+   [6] 34333 msgs/sec ~ 4394714.7405391075/sec (100000 msgs)
+   [7] 34335 msgs/sec ~ 4394895.1331806155/sec (100000 msgs)
+   [8] 34332 msgs/sec ~ 4394508.732300149/sec (100000 msgs)
+   [9] 34321 msgs/sec ~ 4393189.280530978/sec (100000 msgs)
+   [10] 34330 msgs/sec ~ 4394268.596802779/sec (100000 msgs)
+   min 34321 | avg 34328 | max  34335 | stddev 4.09878030638384 msgs
+
+Nats pub/sub stats: 385345 msgs/sec ~ 49324272.01149149/sec
+  Pub stats: 36887 msgs/sec ~ 4721574.6730107395/sec
+  Sub stats: 350314 msgs/sec ~ 44840247.28317408/sec
+   [1] 35047 msgs/sec ~ 4486101.932145457/sec (100000 msgs)
+   [2] 35043 msgs/sec ~ 4485538.845636878/sec (100000 msgs)
+   [3] 35049 msgs/sec ~ 4486307.3576117465/sec (100000 msgs)
+   [4] 35038 msgs/sec ~ 4484933.827490584/sec (100000 msgs)
+   [5] 35044 msgs/sec ~ 4485645.19838767/sec (100000 msgs)
+   [6] 35050 msgs/sec ~ 4486476.823528619/sec (100000 msgs)
+   [7] 35051 msgs/sec ~ 4486560.542245931/sec (100000 msgs)
+   [8] 35053 msgs/sec ~ 4486888.8000169415/sec (100000 msgs)
+   [9] 35034 msgs/sec ~ 4484385.156475487/sec (100000 msgs)
+   [10] 35031 msgs/sec ~ 4484024.728317408/sec (100000 msgs)
+   min 35031 | avg 35044 | max  35053 | stddev 7.113367697511496 msgs

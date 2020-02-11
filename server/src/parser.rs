@@ -174,7 +174,9 @@ impl Parser {
                             return Err(NError::new(ERROR_MESSAGE_SIZE_TOO_LARGE));
                         }
                         if size + self.arg_len > BUF_LEN {
-                            self.msg_buf = Some(Vec::with_capacity(size));
+                            if self.msg_buf.is_none() {
+                                self.msg_buf = Some(Vec::with_capacity(size));
+                            }
                         }
                         self.msg_total_len = size;
                     }
@@ -295,7 +297,10 @@ impl Parser {
         Ok(ParseResult::Pub(pub_arg))
     }
     pub fn clear_msg_buf(&mut self) {
-        self.msg_buf = None;
+        //self.msg_buf = None;
+        if let Some(ref mut v) = self.msg_buf {
+            v.clear();
+        }
         self.msg_len = 0;
         self.msg_total_len = 0;
     }
