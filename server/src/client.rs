@@ -8,7 +8,7 @@ use std::error::Error;
 use std::sync::{Arc, Once};
 use tokio::io::*;
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
 #[derive(Debug)]
 pub struct Client<T: SubListTrait> {
@@ -64,6 +64,7 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
                 return;
             }
             let mut buf = &buf[0..n];
+            let mut rng = rand::rngs::StdRng::from_entropy();
             loop {
                 let r = parser.parse(&buf[..]);
                 if r.is_err() {
@@ -83,7 +84,7 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
                         }
                     }
                     ParseResult::Pub(ref pub_arg) => {
-                        if let Err(e) = self.process_pub(pub_arg).await {
+                        if let Err(e) = self.process_pub(pub_arg, &mut rng).await {
                             self.process_error(e, subs).await;
                             return;
                         }
@@ -129,18 +130,38 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         sublist.insert(sub)?;
         Ok(())
     }
-    async fn process_pub(&self, pub_arg: &PubArg<'_>) -> crate::error::Result<()> {
+    async fn process_pub(
+        &self,
+        pub_arg: &PubArg<'_>,
+        rng: &mut rand::rngs::StdRng,
+    ) -> crate::error::Result<()> {
         let sub_result = {
             let sub_list = &mut self.srv.lock().await.sublist;
             sub_list.match_subject(pub_arg.subject)
         };
+        let msg = Arc::new(Vec::from(pub_arg.msg));
+        let (tx, mut rx) = mpsc::channel(sub_result.psubs.len());
         for sub in sub_result.psubs.iter() {
-            self.send_message(sub.as_ref(), pub_arg)
-                .await
-                .map_err(|_| NError::new(ERROR_CONNECTION_CLOSED))?;
+            let sub = Arc::clone(sub);
+            let msg = msg.clone();
+            let mut tx = tx.clone();
+            tokio::spawn(async move {
+                if let Err(e) = Self::send_message2(sub, msg)
+                    .await
+                    .map_err(|_| NError::new(ERROR_CONNECTION_CLOSED))
+                {
+                    println!("should close sub client");
+                    //todo close sub client
+                }
+                if let Err(e) = tx.send(()).await {
+                    panic!("never failed");
+                }
+            });
+        }
+        for _ in 0..sub_result.psubs.len() {
+            rx.recv().await;
         }
         //qsubs 要考虑负载均衡问题
-        let mut rng = rand::rngs::StdRng::from_entropy();
         for qsubs in sub_result.qsubs.iter() {
             let n = rng.next_u32();
             let n = n as usize % qsubs.len();
@@ -169,6 +190,27 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         buf.write(pub_arg.size_buf.as_bytes())?;
         buf.write("\r\n".as_bytes())?;
         buf.write(pub_arg.msg)?; //经测试,如果这里不使用缓存,而是多个await,性能会大幅下降.
+        buf.write("\r\n".as_bytes())?;
+        let mut msg_buf = buf.into_inner();
+        writer.write(msg_buf.bytes()).await?;
+        //        writer.flush().await?; 暂不需要flush,因为没有使用BufWriter
+        msg_buf.clear();
+        msg_sender.msg_buf = Some(msg_buf);
+        Ok(())
+    }
+    async fn send_message2(sub: Arc<Subscription>, msg: Arc<Vec<u8>>) -> std::io::Result<()> {
+        let mut msg_sender = sub.msg_sender.lock().await;
+        let msg_buf = msg_sender.msg_buf.take().expect("must have");
+        let writer = &mut msg_sender.writer;
+        let mut buf = msg_buf.writer();
+        buf.write("MSG ".as_bytes())?;
+        buf.write(sub.subject.as_bytes())?;
+        buf.write(" ".as_bytes())?;
+        buf.write(sub.sid.as_bytes())?;
+        buf.write(" ".as_bytes())?;
+        write!(buf, "{}", msg.len())?;
+        buf.write("\r\n".as_bytes())?;
+        buf.write(msg.as_slice())?; //经测试,如果这里不使用缓存,而是多个await,性能会大幅下降.
         buf.write("\r\n".as_bytes())?;
         let mut msg_buf = buf.into_inner();
         writer.write(msg_buf.bytes()).await?;
@@ -221,6 +263,9 @@ pub use test_helper::new_test_tcp_writer;
 #[cfg(test)]
 mod tests {
     use super::*;
+    extern crate test;
+    use test::Bencher;
+
     #[test]
     fn test() {}
     #[test]
@@ -229,5 +274,12 @@ mod tests {
             let mut r = rand::rngs::StdRng::from_entropy();
             println!("next={}", r.next_u32());
         }
+    }
+    #[bench]
+    fn bench_gen_rng(b: &mut Bencher) {
+        b.iter(|| {
+            let mut r = rand::rngs::StdRng::from_entropy();
+            drop(r);
+        });
     }
 }

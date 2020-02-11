@@ -4,8 +4,8 @@
 use crate::server::Server;
 use crate::simple_sublist::SimpleSubList;
 use crate::sublist::TrieSubList;
-use std::error::Error;
 use jemallocator::Jemalloc;
+use std::error::Error;
 
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
@@ -16,7 +16,6 @@ mod parser;
 mod server;
 mod simple_sublist;
 mod sublist;
-mod sublist2;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     println!("server start..");
