@@ -99,10 +99,32 @@ async fn run_publiser(
     bench: Arc<Mutex<Benchmark>>,
 ) {
     start_wg.done().await;
-    let msg = vec![0x33; opt.msg_size];
+    let msg = vec![0x4a; opt.msg_size];
     let start = Instant::now();
-    for _ in 0..num_msgs {
-        let _ = c.pub_message(opt.subject.as_str(), msg.as_slice()).await;
+    let t = 0..num_msgs;
+    let mut i = 0;
+    let step = 50;
+    let mut msgs = Vec::with_capacity(step);
+    let mut subjects = Vec::with_capacity(step);
+    while i < num_msgs {
+        let mut j = i;
+        let expect = i + step;
+        while j < num_msgs && j < expect {
+            msgs.push(msg.as_slice());
+            subjects.push(opt.subject.as_str());
+            j += 1;
+            i += 1;
+        }
+        //        println!("pub step");
+        if msgs.len() > 0 {
+            //            println!("send message len={}", subjects.len());
+            if let Err(e) = c.pub_messages(subjects.as_slice(), msgs.as_slice()).await {
+                println!("pub message error {}", e);
+                return;
+            };
+        }
+        msgs.clear();
+        subjects.clear();
     }
     let s = Sample::new(
         num_msgs,

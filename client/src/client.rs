@@ -130,6 +130,33 @@ impl Client {
         self.msg_buf = Some(msg_buf);
         Ok(())
     }
+    //批量pub,
+    pub async fn pub_messages(&mut self, subject: &[&str], msg: &[&[u8]]) -> std::io::Result<()> {
+        use std::io::Write;
+        let msg_buf = BytesMut::new(); //  self.msg_buf.take().expect("must have");
+        let mut writer = msg_buf.writer();
+        for i in 0..subject.len() {
+            writer.write("PUB ".as_bytes())?;
+            writer.write(subject[i].as_bytes())?;
+            //        write!(writer, subject)?;
+            write!(writer, " {}\r\n", msg[i].len())?;
+            writer.write(msg[i])?; //todo 这个需要copy么?最好别copy
+            writer.write("\r\n".as_bytes())?;
+        }
+        let mut msg_buf = writer.into_inner();
+        let mut writer = self.writer.lock().await;
+        {
+            let s = unsafe { std::str::from_utf8_unchecked(msg_buf.bytes()) };
+            if s.find("JJP").is_some() {
+                println!("send={}", s);
+                std::process::exit(32);
+            }
+        }
+        writer.write(msg_buf.bytes()).await?;
+        //        msg_buf.clear();
+        //        self.msg_buf = Some(msg_buf);
+        Ok(())
+    }
     //    type MessageHandler = Box<dyn Fn(&[u8]) -> Result<()> + Sync + Send >;
     //sub消息格式为SUB subject {queue} {sid}\r\n
     //可能由于rustc的bug,导致如果subject是&str,则会报错E0700,暂时使用String来替代

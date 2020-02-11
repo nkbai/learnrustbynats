@@ -19,7 +19,7 @@ pub struct ServerState<T: SubListTrait> {
 
 impl<T: SubListTrait + Send + 'static> Server<T> {
     pub async fn start(self) -> Result<(), Box<dyn Error>> {
-        let addr = "127.0.0.1:4222";
+        let addr = "0.0.0.0:4222";
         let mut listener = TcpListener::bind(addr).await?;
         //go func(){}
         loop {

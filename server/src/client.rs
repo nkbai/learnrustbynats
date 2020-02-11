@@ -46,10 +46,12 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         msg_sender
     }
     async fn client_task(self, mut reader: ReadHalf<TcpStream>) {
-        let mut buf = [0; 1024];
         let mut parser = Parser::new();
+        let mut count: i32 = 0;
         let mut subs = HashMap::new();
         loop {
+            count += 1;
+            let mut buf = [0; 1024 * 63];
             let r = reader.read(&mut buf[..]).await;
             if r.is_err() {
                 let e = r.unwrap_err();
@@ -63,12 +65,23 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
                     .await;
                 return;
             }
-            let mut buf = &buf[0..n];
+            let mut buf2 = &buf[0..n];
+            {
+                let s = unsafe { std::str::from_utf8_unchecked(buf2) };
+                if let Some(pos) = s.find("JJP") {
+                    println!("n={},pos={},count={},receive err {}", n, pos, count, s);
+                    std::process::exit(32);
+                }
+            }
             let mut rng = rand::rngs::StdRng::from_entropy();
             let mut cache = HashMap::new();
             loop {
-                let r = parser.parse(&buf[..]);
+                let r = parser.parse(&buf2[..]);
                 if r.is_err() {
+                    {
+                        let s = unsafe { std::str::from_utf8_unchecked(&buf2[..]) };
+                        println!("parse err buf={}", s);
+                    }
                     self.process_error(r.unwrap_err(), subs).await;
                     return;
                 }
@@ -92,10 +105,10 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
                         parser.clear_msg_buf();
                     }
                 }
-                if left == buf.len() {
+                if left == buf2.len() {
                     break;
                 }
-                buf = &buf[left..];
+                buf2 = &buf2[left..];
             }
         }
     }
@@ -147,36 +160,40 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
                 r
             }
         };
-        let msg = Arc::new(Vec::from(pub_arg.msg));
-        let (tx, mut rx) = mpsc::channel(sub_result.psubs.len());
-        for sub in sub_result.psubs.iter() {
-            let sub = Arc::clone(sub);
-            let msg = msg.clone();
-            let mut tx = tx.clone();
-            tokio::spawn(async move {
-                if let Err(e) = Self::send_message2(sub, msg)
+        if sub_result.psubs.len() > 0 {
+            let msg = Arc::new(Vec::from(pub_arg.msg));
+            let (tx, mut rx) = mpsc::channel(sub_result.psubs.len());
+            for sub in sub_result.psubs.iter() {
+                let sub = Arc::clone(sub);
+                let msg = msg.clone();
+                let mut tx = tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = Self::send_message2(sub, msg)
+                        .await
+                        .map_err(|_| NError::new(ERROR_CONNECTION_CLOSED))
+                    {
+                        println!("should close sub client");
+                        //todo close sub client
+                    }
+                    if let Err(e) = tx.send(()).await {
+                        panic!("never failed");
+                    }
+                });
+            }
+            for _ in 0..sub_result.psubs.len() {
+                rx.recv().await;
+            }
+        }
+        if sub_result.qsubs.len() > 0 {
+            //qsubs 要考虑负载均衡问题
+            for qsubs in sub_result.qsubs.iter() {
+                let n = rng.next_u32();
+                let n = n as usize % qsubs.len();
+                let sub = qsubs.get(n).unwrap();
+                self.send_message(sub.as_ref(), pub_arg)
                     .await
-                    .map_err(|_| NError::new(ERROR_CONNECTION_CLOSED))
-                {
-                    println!("should close sub client");
-                    //todo close sub client
-                }
-                if let Err(e) = tx.send(()).await {
-                    panic!("never failed");
-                }
-            });
-        }
-        for _ in 0..sub_result.psubs.len() {
-            rx.recv().await;
-        }
-        //qsubs 要考虑负载均衡问题
-        for qsubs in sub_result.qsubs.iter() {
-            let n = rng.next_u32();
-            let n = n as usize % qsubs.len();
-            let sub = qsubs.get(n).unwrap();
-            self.send_message(sub.as_ref(), pub_arg)
-                .await
-                .map_err(|_| NError::new(ERROR_CONNECTION_CLOSED))?;
+                    .map_err(|_| NError::new(ERROR_CONNECTION_CLOSED))?;
+            }
         }
         Ok(())
     }

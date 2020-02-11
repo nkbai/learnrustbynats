@@ -207,7 +207,7 @@ impl Parser {
             }
             i += 1;
         }
-        Ok((ParseResult::NoMsg, 0))
+        Ok((ParseResult::NoMsg, buf.len()))
     }
     //一种是消息体比较短,可以直接放在buf中,无需另外分配内存
     //另一种是消息体很长,无法放在buf中,额外分配了msg_buf空间
@@ -453,6 +453,34 @@ mod tests {
                 assert_eq!(p.msg, "hello".as_bytes());
             }
             _ => assert!(false, "must be valid pub arg "),
+        }
+    }
+    #[test]
+    fn test_pub2() {
+        let mut p = Parser::new();
+        let mut buf = "PUB subject 5\r\nhello\r\nPUB subject 5\r\nhe".as_bytes();
+        loop {
+            unsafe {
+                let s = std::str::from_utf8_unchecked(buf);
+                println!("buf={}", s);
+            }
+            let r = p.parse(buf);
+            println!("r={:?}", r);
+            assert!(!r.is_err());
+            let r = r.unwrap();
+            buf = &buf[r.1..];
+            println!("r.0={:?}", r.0);
+            match r.0 {
+                ParseResult::Pub(pub_arg) => {
+                    println!("pub_arg.subject={}", pub_arg.subject);
+                    p.clear_msg_buf();
+                }
+                ParseResult::NoMsg => {}
+                _ => panic!(),
+            }
+            if buf.len() == 0 {
+                break;
+            }
         }
     }
     #[test]
