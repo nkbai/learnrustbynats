@@ -1,7 +1,7 @@
 use crate::error::*;
 use crate::parser::{ParseResult, Parser, PubArg, SubArg};
 use crate::server::*;
-use crate::simple_sublist::{ArcSubscription, SubListTrait, Subscription};
+use crate::simple_sublist::{ArcSubResult, ArcSubscription, SubListTrait, Subscription};
 use rand::{RngCore, SeedableRng};
 use std::collections::HashMap;
 use std::error::Error;
@@ -65,6 +65,7 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
             }
             let mut buf = &buf[0..n];
             let mut rng = rand::rngs::StdRng::from_entropy();
+            let mut cache = HashMap::new();
             loop {
                 let r = parser.parse(&buf[..]);
                 if r.is_err() {
@@ -84,7 +85,7 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
                         }
                     }
                     ParseResult::Pub(ref pub_arg) => {
-                        if let Err(e) = self.process_pub(pub_arg, &mut rng).await {
+                        if let Err(e) = self.process_pub(pub_arg, &mut cache, &mut rng).await {
                             self.process_error(e, subs).await;
                             return;
                         }
@@ -133,11 +134,18 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
     async fn process_pub(
         &self,
         pub_arg: &PubArg<'_>,
+        cache: &mut HashMap<String, ArcSubResult>,
         rng: &mut rand::rngs::StdRng,
     ) -> crate::error::Result<()> {
         let sub_result = {
-            let sub_list = &mut self.srv.lock().await.sublist;
-            sub_list.match_subject(pub_arg.subject)
+            if let Some(r) = cache.get(pub_arg.subject) {
+                Arc::clone(r)
+            } else {
+                let sub_list = &mut self.srv.lock().await.sublist;
+                let r = sub_list.match_subject(pub_arg.subject);
+                cache.insert(pub_arg.subject.to_string(), Arc::clone(&r));
+                r
+            }
         };
         let msg = Arc::new(Vec::from(pub_arg.msg));
         let (tx, mut rx) = mpsc::channel(sub_result.psubs.len());

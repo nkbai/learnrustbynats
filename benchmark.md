@@ -118,6 +118,7 @@ Nats pub/sub stats: 385345 msgs/sec ~ 49324272.01149149/sec
 ## 并发发送
 send_message由串行改为并发,
 `--num-pubs 1`基本没变化,但是改为`--num-pubs 10`有一倍提升.
+ 这种情况下，无论是client还是server内存占用都非常低。 考虑启用缓存,来空间换时间.
 
 ### --num-pubs 1
 
@@ -162,4 +163,48 @@ Nats pub/sub stats: 790452 msgs/sec ~ 101177900.76085752/sec
    [10] 71863 msgs/sec ~ 9198546.939085985/sec (1000000 msgs)
    min 71859 | avg 71862 | max  71866 | stddev 2.1213203435596424 msgs
 
-   
+
+## 加入本地cache
+只是为了测试,没有更新机制
+不完善,可以看到有一定提高,但是不明显,几个百分点的样子
+### -pubs 1
+Nats pub/sub stats: 390384 msgs/sec ~ 49969156.719011426/sec
+  Pub stats: 35743 msgs/sec ~ 4575136.18287007/sec
+  Sub stats: 354894 msgs/sec ~ 45426506.108192205/sec
+   [1] 35490 msgs/sec ~ 4542791.626176854/sec (1000000 msgs)
+   [2] 35489 msgs/sec ~ 4542685.696734685/sec (1000000 msgs)
+   [3] 35490 msgs/sec ~ 4542804.556233796/sec (1000000 msgs)
+   [4] 35490 msgs/sec ~ 4542841.2181290435/sec (1000000 msgs)
+   [5] 35491 msgs/sec ~ 4542859.491013554/sec (1000000 msgs)
+   [6] 35489 msgs/sec ~ 4542700.385740192/sec (1000000 msgs)
+   [7] 35489 msgs/sec ~ 4542717.684684231/sec (1000000 msgs)
+   [8] 35490 msgs/sec ~ 4542745.48128393/sec (1000000 msgs)
+   [9] 35490 msgs/sec ~ 4542815.080036936/sec (1000000 msgs)
+   [10] 35490 msgs/sec ~ 4542788.906937107/sec (1000000 msgs)
+   min 35489 | avg 35489 | max  35491 | stddev 1 msgs
+
+### -pubs 10
+   Nats pub/sub stats: 813669 msgs/sec ~ 104149682.70495887/sec
+  Pub stats: 77845 msgs/sec ~ 9964231.962461589/sec
+   [1] 7821 msgs/sec ~ 1001095.0332549638/sec (100000 msgs)
+   [2] 7812 msgs/sec ~ 1000051.0897194011/sec (100000 msgs)
+   [3] 7811 msgs/sec ~ 999847.6086172981/sec (100000 msgs)
+   [4] 7810 msgs/sec ~ 999774.9932175713/sec (100000 msgs)
+   [5] 7815 msgs/sec ~ 1000337.8641917821/sec (100000 msgs)
+   [6] 7807 msgs/sec ~ 999348.5271154706/sec (100000 msgs)
+   [7] 7805 msgs/sec ~ 999100.0203804227/sec (100000 msgs)
+   [8] 7809 msgs/sec ~ 999660.2638192733/sec (100000 msgs)
+   [9] 7805 msgs/sec ~ 999132.7749196282/sec (100000 msgs)
+   [10] 7806 msgs/sec ~ 999202.2221919566/sec (100000 msgs)
+  Sub stats: 739699 msgs/sec ~ 94681529.7317808/sec
+   [1] 73976 msgs/sec ~ 9469015.62481706/sec (1000000 msgs)
+   [2] 73975 msgs/sec ~ 9468881.113728898/sec (1000000 msgs)
+   [3] 73974 msgs/sec ~ 9468771.64819417/sec (1000000 msgs)
+   [4] 73979 msgs/sec ~ 9469414.929399932/sec (1000000 msgs)
+   [5] 73978 msgs/sec ~ 9469243.13565144/sec (1000000 msgs)
+   [6] 73977 msgs/sec ~ 9469088.617461707/sec (1000000 msgs)
+   [7] 73970 msgs/sec ~ 9468177.11740739/sec (1000000 msgs)
+   [8] 73973 msgs/sec ~ 9468598.682160331/sec (1000000 msgs)
+   [9] 73971 msgs/sec ~ 9468336.636719728/sec (1000000 msgs)
+   [10] 73972 msgs/sec ~ 9468442.361155936/sec (1000000 msgs)
+   min 73970 | avg 73974 | max  73979 | stddev 2.9154759474226504 msgs
