@@ -1,5 +1,7 @@
 use crate::parser::Parser;
 use crate::parser::*;
+use bytes::buf::BufMutExt;
+use bytes::{Buf, BytesMut};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::*;
@@ -11,6 +13,7 @@ type MessageHandler = Box<dyn FnMut(&[u8]) -> std::result::Result<(), ()> + Sync
 pub struct Client {
     addr: String,
     writer: Arc<Mutex<WriteHalf<TcpStream>>>,
+    msg_buf: Option<BytesMut>,
     pub stop: Option<oneshot::Sender<()>>,
     sid: u64,
     handler: Arc<Mutex<HashMap<String, MessageHandler>>>,
@@ -35,6 +38,7 @@ impl Client {
             stop: Some(tx),
             sid: 0,
             handler: msg_sender,
+            msg_buf: Some(BytesMut::with_capacity(512)),
         });
     }
     async fn receive_task(
@@ -109,15 +113,21 @@ impl Client {
         }
     }
     //pub消息格式为PUB subject size\r\n{message}
-    pub async fn pub_message(&self, subject: &str, msg: &[u8]) -> std::io::Result<()> {
+    pub async fn pub_message(&mut self, subject: &str, msg: &[u8]) -> std::io::Result<()> {
+        use std::io::Write;
+        let msg_buf = self.msg_buf.take().expect("must have");
+        let mut writer = msg_buf.writer();
+        writer.write("PUB ".as_bytes())?;
+        writer.write(subject.as_bytes())?;
+        //        write!(writer, subject)?;
+        write!(writer, " {}\r\n", msg.len())?;
+        writer.write(msg)?; //todo 这个需要copy么?最好别copy
+        writer.write("\r\n".as_bytes())?;
+        let mut msg_buf = writer.into_inner();
         let mut writer = self.writer.lock().await;
-        writer.write("PUB ".as_bytes()).await?;
-        writer.write(subject.as_bytes()).await?;
-        writer
-            .write(format!(" {}\r\n", msg.len()).as_bytes())
-            .await?;
-        writer.write(msg).await?;
-        writer.write("\r\n".as_bytes()).await?;
+        writer.write(msg_buf.bytes()).await?;
+        msg_buf.clear();
+        self.msg_buf = Some(msg_buf);
         Ok(())
     }
     //    type MessageHandler = Box<dyn Fn(&[u8]) -> Result<()> + Sync + Send >;

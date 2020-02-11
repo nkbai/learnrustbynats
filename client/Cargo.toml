@@ -21,6 +21,7 @@ bitflags="1.0"
 lazy_static="1.0"
 get_if_addrs="0.5"
 futures = { version = "0.3.0", features = ["async-await"] }
+bytes="0.5"
 
 [[example]]
 name = "pub_subject"

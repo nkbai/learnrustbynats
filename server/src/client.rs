@@ -19,10 +19,14 @@ pub struct Client<T: SubListTrait> {
 #[derive(Debug)]
 pub struct ClientMessageSender {
     writer: WriteHalf<TcpStream>,
+    msg_buf: Option<bytes::BytesMut>,
 }
 impl ClientMessageSender {
     pub fn new(writer: WriteHalf<TcpStream>) -> Self {
-        Self { writer }
+        Self {
+            writer,
+            msg_buf: Some(bytes::BytesMut::with_capacity(1024)),
+        }
     }
 }
 impl<T: SubListTrait + Send + 'static> Client<T> {
@@ -153,17 +157,24 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
     /// <message>\r\n
     /// ```
     async fn send_message(&self, sub: &Subscription, pub_arg: &PubArg<'_>) -> std::io::Result<()> {
-        let writer = &mut sub.msg_sender.lock().await.writer;
-        writer.write("MSG ".as_bytes()).await?;
-        writer.write(sub.subject.as_bytes()).await?;
-        writer.write(" ".as_bytes()).await?;
-        writer.write(sub.sid.as_bytes()).await?;
-        writer.write(" ".as_bytes()).await?;
-        writer.write(pub_arg.size_buf.as_bytes()).await?;
-        writer.write("\r\n".as_bytes()).await?;
-        writer.write(pub_arg.msg).await?;
-        writer.write("\r\n".as_bytes()).await?;
-        writer.flush().await?;
+        let mut msg_sender = sub.msg_sender.lock().await;
+        let msg_buf = msg_sender.msg_buf.take().expect("must have");
+        let writer = &mut msg_sender.writer;
+        let mut buf = msg_buf.writer();
+        buf.write("MSG ".as_bytes())?;
+        buf.write(sub.subject.as_bytes())?;
+        buf.write(" ".as_bytes())?;
+        buf.write(sub.sid.as_bytes())?;
+        buf.write(" ".as_bytes())?;
+        buf.write(pub_arg.size_buf.as_bytes())?;
+        buf.write("\r\n".as_bytes())?;
+        buf.write(pub_arg.msg)?; //经测试,如果这里不使用缓存,而是多个await,性能会大幅下降.
+        buf.write("\r\n".as_bytes())?;
+        let mut msg_buf = buf.into_inner();
+        writer.write(msg_buf.bytes()).await?;
+        //        writer.flush().await?; 暂不需要flush,因为没有使用BufWriter
+        msg_buf.clear();
+        msg_sender.msg_buf = Some(msg_buf);
         Ok(())
     }
 }
@@ -201,8 +212,12 @@ pub mod test_helper {
         SENDER.clone()
     }
 }
+use bytes::buf::BufMutExt;
+use bytes::Buf;
+use std::io::Write;
 #[cfg(test)]
 pub use test_helper::new_test_tcp_writer;
+
 #[cfg(test)]
 mod tests {
     use super::*;

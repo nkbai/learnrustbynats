@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let opt = opt.clone();
         let num_msgs = pub_counts[i];
         tokio::spawn(async move {
-            run_publiser(&c, start_wg, done_wg, num_msgs, opt, bench).await;
+            run_publiser(&mut c, start_wg, done_wg, num_msgs, opt, bench).await;
             c.close();
         });
     }
@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 async fn run_publiser(
-    c: &Client,
+    c: &mut Client,
     start_wg: WaitGroup,
     done_wg: WaitGroup,
     num_msgs: usize,
@@ -160,3 +160,5 @@ async fn run_subscriber(
     bench.lock().await.add_sub_sample(s);
     done_wg.done().await;
 }
+#[test]
+fn test() {}
