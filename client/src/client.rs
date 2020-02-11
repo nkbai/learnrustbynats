@@ -4,16 +4,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::*;
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex};
 
-//type MessageHandler = Box<dyn Fn(&[u8]) -> Result<()> + Sync + Send>;
-#[derive(Debug)]
+type MessageHandler = Box<dyn FnMut(&[u8]) -> std::result::Result<(), ()> + Sync + Send>;
+//#[derive(Debug)]
 pub struct Client {
     addr: String,
     writer: Arc<Mutex<WriteHalf<TcpStream>>>,
-    pub stop: oneshot::Sender<()>,
+    pub stop: Option<oneshot::Sender<()>>,
     sid: u64,
-    handler: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<Vec<u8>>>>>,
+    handler: Arc<Mutex<HashMap<String, MessageHandler>>>,
 }
 
 impl Client {
@@ -32,7 +32,7 @@ impl Client {
         return Ok(Client {
             addr: addr.to_string(),
             writer,
-            stop: tx,
+            stop: Some(tx),
             sid: 0,
             handler: msg_sender,
         });
@@ -40,7 +40,7 @@ impl Client {
     async fn receive_task(
         mut reader: ReadHalf<TcpStream>,
         stop: oneshot::Receiver<()>,
-        handler: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<Vec<u8>>>>>,
+        handler: Arc<Mutex<HashMap<String, MessageHandler>>>,
         writer: Arc<Mutex<WriteHalf<TcpStream>>>,
     ) {
         use futures::*;
@@ -50,66 +50,66 @@ impl Client {
         //        let mut _r: Result<usize>;
         loop {
             select! {
-                _=stop=>{
-                println!("server stoped.");
-                let r=writer.lock().await.shutdown().await;
-                 if r.is_err() {
-                    println!("receive_task err {:?}", r.unwrap_err());
-                    return;
-                }
-                return;
-                },
-                  r = reader.read(&mut buf[..]).fuse()=>{
-                if r.is_err() {
-                    println!("receive_task err {:?}", r.unwrap_err());
-                    return;
-                }
-                let r = r.unwrap();
-                if r == 0 {
-                    println!("connection closed");
-                    return;
-                }
-                let mut buf = &buf[0..r];
-                println!("read buf len={},buf={}", r, unsafe {
-                    std::str::from_utf8_unchecked(buf)
-                });
-                loop {
-                    let r = parser.parse(buf);
-                    if r.is_err() {
-                        println!("msg error:{}", r.unwrap_err());
-                        let r=writer.lock().await.shutdown().await;
-                        if r.is_err() {
-                            println!("shutdown err {:?}",r);
-                        }
-                        return;
-                    }
-                    let (r, n) = r.unwrap();
-                    if let ParseResult::MsgArg(ref msg) = r {
-                        if let Some(handler) = handler.lock().await.get(msg.subject) {
-                            let r = handler.send(msg.msg.to_vec());
-                            if r.is_err() {
-                                println!("handler error {}", r.unwrap_err());
+                            _=stop=>{
+                            println!("client stoped.");
+                            let r=writer.lock().await.shutdown().await;
+                             if r.is_err() {
+                                println!("receive_task err {:?}", r.unwrap_err());
                                 return;
                             }
-                        } else {
-                            println!("receive msg on subject {}, not found receiver", msg.subject);
+                            return;
+                            },
+                              r = reader.read(&mut buf[..]).fuse()=>{
+                            if r.is_err() {
+                                println!("receive_task err {:?}", r.unwrap_err());
+                                return;
+                            }
+                            let r = r.unwrap();
+                            if r == 0 {
+                                println!("connection closed");
+                                return;
+                            }
+                            let mut buf = &buf[0..r];
+            //                println!("read buf len={},buf={}", r, unsafe {
+            //                    std::str::from_utf8_unchecked(buf)
+            //                });
+                            loop {
+                                let r = parser.parse(buf);
+                                if r.is_err() {
+                                    println!("msg error:{}", r.unwrap_err());
+                                    let r=writer.lock().await.shutdown().await;
+                                    if r.is_err() {
+                                        println!("shutdown err {:?}",r);
+                                    }
+                                    return;
+                                }
+                                let (r, n) = r.unwrap();
+                                if let ParseResult::MsgArg(ref msg) = r {
+                                    if let Some(handler) = handler.lock().await.get_mut(msg.subject) {
+                                        let r = handler(msg.msg);
+                                        if r.is_err() {
+                                            println!("handler error {:?}", r.unwrap_err());
+                                            return;
+                                        }
+                                    } else {
+                                        println!("receive msg on subject {}, not found receiver", msg.subject);
+                                    }
+                                    parser.clear_msg_buf();
+                                } else if ParseResult::NoMsg == r {
+                                    break; //NoMsg
+                                }
+            //                    println!("n={},buf len={}", n, buf.len());
+                                if n == buf.len() {
+                                    break;
+                                }
+                                buf = &buf[n..];
+                            }
                         }
-                        parser.clear_msg_buf();
-                    } else if ParseResult::NoMsg == r {
-                        break; //NoMsg
-                    }
-                    println!("n={},buf len={}", n, buf.len());
-                    if n == buf.len() {
-                        break;
-                    }
-                    buf = &buf[n..];
-                }
-            }
-                 }
+                             }
         }
     }
     //pub消息格式为PUB subject size\r\n{message}
-    pub async fn pub_message(&mut self, subject: &str, msg: &[u8]) -> std::io::Result<()> {
+    pub async fn pub_message(&self, subject: &str, msg: &[u8]) -> std::io::Result<()> {
         let mut writer = self.writer.lock().await;
         writer.write("PUB ".as_bytes()).await?;
         writer.write(subject.as_bytes()).await?;
@@ -120,13 +120,15 @@ impl Client {
         writer.write("\r\n".as_bytes()).await?;
         Ok(())
     }
+    //    type MessageHandler = Box<dyn Fn(&[u8]) -> Result<()> + Sync + Send >;
     //sub消息格式为SUB subject {queue} {sid}\r\n
+    //可能由于rustc的bug,导致如果subject是&str,则会报错E0700,暂时使用String来替代
     pub async fn sub_message(
         &mut self,
-        subject: &str,
-        queue: Option<&str>,
-        //        handler: MessageHandler,
-    ) -> std::io::Result<mpsc::UnboundedReceiver<Vec<u8>>> {
+        subject: String,
+        queue: Option<String>,
+        handler: MessageHandler,
+    ) -> std::io::Result<()> {
         self.sid += 1;
         let mut writer = self.writer.lock().await;
         if let Some(q) = queue {
@@ -138,14 +140,60 @@ impl Client {
                 .write(format!("SUB {} {}\r\n", subject, self.sid).as_bytes())
                 .await?;
         }
-        let (tx, rx) = mpsc::unbounded_channel();
-        self.handler.lock().await.insert(subject.to_string(), tx);
-        return Ok(rx);
+        //        let (tx, rx) = mpsc::unbounded_channel();
+        self.handler
+            .lock()
+            .await
+            .insert(subject.to_string(), handler);
+        Ok(())
+    }
+    pub fn close(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    struct A {
+        a: String,
+    }
+    impl A {
+        async fn test(
+            &mut self,
+            arg: &str,
+            handler: Box<dyn Fn(&[u8]) -> std::result::Result<(), ()> + Send + Sync + '_>,
+        ) {
+        }
+    }
+    type MessageHandler = Box<dyn Fn(&[u8]) -> std::result::Result<(), ()> + Sync + Send>;
+    async fn test2(handler: MessageHandler) {
+        let args = "hello".to_string();
+        handler(args.as_bytes());
+    }
+    fn print_hello(args: &[u8]) -> std::result::Result<(), ()> {
+        println!("{:?}", args);
+        Ok(())
+    }
     #[test]
     fn test() {}
+    #[tokio::main]
+    #[test]
+    async fn test_2() {
+        test2(Box::new(print_hello)).await
+    }
+
+    use std::cell::Cell;
+
+    trait Trait<'a> {}
+
+    impl<'a, 'b> Trait<'b> for Cell<&'a u32> {}
+
+    fn foo<'x, 'y>(x: Cell<&'x u32>) -> impl Trait<'y> + 'x
+    where
+        'x: 'y,
+    {
+        x
+    }
 }

@@ -1,6 +1,3 @@
-use std::collections::{BTreeSet, HashMap};
-use std::sync::Arc;
-
 /**
 ### 核心的trie树
 这个算是整个系统稍微复杂一点的部分
@@ -34,6 +31,9 @@ foo.dd
 */
 use crate::error::*;
 use crate::simple_sublist::*;
+use lru_cache::LruCache;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 
 const PWC: u8 = '*' as u8;
 const FWC: u8 = '>' as u8;
@@ -77,12 +77,12 @@ impl TrieNode {
 }
 #[derive(Debug)]
 struct SubResultCache {
-    cache: lru::LruCache<String, ArcSubResult>,
+    cache: LruCache<String, ArcSubResult>,
 }
 impl SubResultCache {
     fn new(cache_size: usize) -> SubResultCache {
         Self {
-            cache: lru::LruCache::new(cache_size),
+            cache: LruCache::new(cache_size),
         }
     }
     /*
@@ -116,7 +116,7 @@ impl SubResultCache {
             }
         }
         for r in v {
-            self.cache.put(r.1, Arc::new(r.0));
+            self.cache.insert(r.1, Arc::new(r.0));
         }
     }
     fn remove(&mut self, sub: &ArcSubscription) {
@@ -156,16 +156,17 @@ impl SubResultCache {
             }
         }
         for r in v {
-            self.cache.put(r.1, Arc::new(r.0));
+            self.cache.insert(r.1, Arc::new(r.0));
         }
     }
     fn get(&mut self, subject: &str) -> Option<ArcSubResult> {
         //        return Some(ArcSubResult::default());
         //todo 由于lru cache 自身问题,等修复后就不需要copy了
-        self.cache.get(&subject.to_string()).map(|r| Arc::clone(r))
+        self.cache.get_mut(subject).map(|r| Arc::clone(r))
+        //        self.cache.get(&subject.to_string())
     }
     fn insert_result(&mut self, subject: &str, result: ArcSubResult) {
-        self.cache.put(subject.to_string(), result);
+        self.cache.insert(subject.to_string(), result);
     }
 }
 #[test]
@@ -202,6 +203,7 @@ pub struct TrieSubList {
     cache: SubResultCache,
     root: Level,
     d: ArcSubResult,
+    default_node: Box<TrieNode>, //只是因为Insert的时候必须有一个初始化的值
 }
 impl TrieSubList {
     pub fn new() -> Self {
@@ -209,6 +211,7 @@ impl TrieSubList {
             cache: Default::default(),
             root: Default::default(),
             d: ArcSubResult::default(),
+            default_node: Default::default(),
         }
     }
 }
@@ -227,7 +230,7 @@ impl SubListTrait for TrieSubList {
         }
         //        println!("insert {}", sub.subject);
         let mut l = &mut self.root;
-        let mut n = &mut Box::new(TrieNode::new());
+        let mut n = &mut self.default_node;
         let mut tokens = split_subject(&sub.subject).peekable();
         while tokens.peek().is_some() {
             let token = tokens.next().unwrap();
@@ -315,7 +318,7 @@ impl SubListTrait for TrieSubList {
 }
 impl TrieSubList {
     fn cache_count(&self) -> usize {
-        0
+        self.cache.cache.len()
     }
     fn add_node_to_result(n: &TrieNode, r: &mut SubResult) {
         for sub in n.subs.iter() {
@@ -985,6 +988,110 @@ mod benchmark {
         let mut s = get_test_sublist();
         b.iter(|| {
             let _ = s.match_subject("apcera.continuum.component.router.ZZZZ");
+        })
+    }
+    fn get_test_array() -> Vec<u32> {
+        let mut v = vec![32; 10000];
+        v[9000] = 999;
+        return v;
+    }
+    fn search_order(v: &[u32]) -> i32 {
+        for i in 0..v.len() {
+            if v[i] == 999 {
+                return i as i32;
+            }
+        }
+        return -1;
+    }
+    //因为不能越界,确保最后一个不是999
+    fn search_order2(v: &mut [u32]) -> i32 {
+        let l = v.len() - 1;
+        let hold = v[l];
+        v[l] = 999;
+        let mut i = 0;
+        loop {
+            if v[i] == 999 {
+                break;
+            }
+            i += 1;
+        }
+        v[l] = hold;
+        if i == l {
+            return -1;
+        } else {
+            return i as i32;
+        }
+    }
+    fn search_order3(v: &[u32]) -> i32 {
+        let l = v.len() - 1;
+        //        let hold = v[l];
+        //        v[l] = 999;
+        let mut i = 0;
+        //访问越界
+        while i <= l {
+            if v[i] == 999 {
+                break;
+            }
+            if v[i + 1] == 999 {
+                i += 1;
+                break;
+            }
+            if v[i + 2] == 999 {
+                i += 2;
+                break;
+            }
+            if v[i + 3] == 999 {
+                i += 3;
+                break;
+            }
+            if v[i + 4] == 999 {
+                i += 4;
+                break;
+            }
+            if v[i + 5] == 999 {
+                i += 5;
+                break;
+            }
+            if v[i + 6] == 999 {
+                i += 6;
+                break;
+            }
+            if v[i + 7] == 999 {
+                i += 7;
+                break;
+            }
+            if v[i + 8] == 999 {
+                i += 8;
+                break;
+            }
+            i += 8;
+        }
+        //        v[l] = holxd;
+        if i > l {
+            return -1;
+        } else {
+            return i as i32;
+        }
+    }
+    #[bench]
+    fn test_search_order(b: &mut Bencher) {
+        let v = get_test_array();
+        b.iter(|| {
+            assert_eq!(9000, search_order(v.as_slice()));
+        })
+    }
+    #[bench]
+    fn test_search_order2(b: &mut Bencher) {
+        let mut v = get_test_array();
+        b.iter(|| {
+            assert_eq!(9000, search_order2(v.as_mut_slice()));
+        })
+    }
+    #[bench]
+    fn test_search_order3(b: &mut Bencher) {
+        let mut v = get_test_array();
+        b.iter(|| {
+            assert_eq!(9000, search_order3(v.as_slice()));
         })
     }
 }

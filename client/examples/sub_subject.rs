@@ -17,6 +17,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         });
     }
     println!("close connection");
-    c.stop.send(());
+    c.close();
     Ok(())
 }

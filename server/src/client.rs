@@ -163,6 +163,7 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         writer.write("\r\n".as_bytes()).await?;
         writer.write(pub_arg.msg).await?;
         writer.write("\r\n".as_bytes()).await?;
+        writer.flush().await?;
         Ok(())
     }
 }

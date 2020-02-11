@@ -64,7 +64,7 @@ impl Parser {
             msg_buf: None,
             msg_total_len: 0,
             msg_len: 0,
-            debug: true,
+            debug: false,
         }
     }
     /**
