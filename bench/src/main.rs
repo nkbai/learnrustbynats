@@ -103,7 +103,7 @@ async fn run_publiser(
     let start = Instant::now();
     let t = 0..num_msgs;
     let mut i = 0;
-    let step = 50;
+    let step = 500;
     let mut msgs = Vec::with_capacity(step);
     let mut subjects = Vec::with_capacity(step);
     while i < num_msgs {

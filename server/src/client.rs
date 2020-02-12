@@ -49,9 +49,18 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         let mut parser = Parser::new();
         let mut count: i32 = 0;
         let mut subs = HashMap::new();
+        let mut buf = [0; 1024 * 640];
+        let mut rng = rand::rngs::StdRng::from_entropy();
+        let mut cache = HashMap::new();
         loop {
+            //            let mut buf: Vec<u8> = Vec::new();
+            //            let r = tokio::io::copy(&mut reader, &mut buf).await;
+            //            match r {
+            //                Ok(r) => println!("recevied {} bytes", r),
+            //                Err(e) => println!("copy err: {}", e),
+            //            }
+            //            return;
             count += 1;
-            let mut buf = [0; 1024 * 63];
             let r = reader.read(&mut buf[..]).await;
             if r.is_err() {
                 let e = r.unwrap_err();
@@ -66,15 +75,6 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
                 return;
             }
             let mut buf2 = &buf[0..n];
-            {
-                let s = unsafe { std::str::from_utf8_unchecked(buf2) };
-                if let Some(pos) = s.find("JJP") {
-                    println!("n={},pos={},count={},receive err {}", n, pos, count, s);
-                    std::process::exit(32);
-                }
-            }
-            let mut rng = rand::rngs::StdRng::from_entropy();
-            let mut cache = HashMap::new();
             loop {
                 let r = parser.parse(&buf2[..]);
                 if r.is_err() {
@@ -217,7 +217,7 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         buf.write(pub_arg.msg)?; //经测试,如果这里不使用缓存,而是多个await,性能会大幅下降.
         buf.write("\r\n".as_bytes())?;
         let mut msg_buf = buf.into_inner();
-        writer.write(msg_buf.bytes()).await?;
+        writer.write_all(msg_buf.bytes()).await?;
         //        writer.flush().await?; 暂不需要flush,因为没有使用BufWriter
         msg_buf.clear();
         msg_sender.msg_buf = Some(msg_buf);
@@ -238,7 +238,7 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         buf.write(msg.as_slice())?; //经测试,如果这里不使用缓存,而是多个await,性能会大幅下降.
         buf.write("\r\n".as_bytes())?;
         let mut msg_buf = buf.into_inner();
-        writer.write(msg_buf.bytes()).await?;
+        writer.write_all(msg_buf.bytes()).await?;
         //        writer.flush().await?; 暂不需要flush,因为没有使用BufWriter
         msg_buf.clear();
         msg_sender.msg_buf = Some(msg_buf);

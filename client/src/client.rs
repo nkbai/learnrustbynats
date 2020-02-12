@@ -125,36 +125,30 @@ impl Client {
         writer.write("\r\n".as_bytes())?;
         let mut msg_buf = writer.into_inner();
         let mut writer = self.writer.lock().await;
-        writer.write(msg_buf.bytes()).await?;
+        writer.write_all(msg_buf.bytes()).await?;
         msg_buf.clear();
         self.msg_buf = Some(msg_buf);
         Ok(())
     }
     //批量pub,
-    pub async fn pub_messages(&mut self, subject: &[&str], msg: &[&[u8]]) -> std::io::Result<()> {
+    pub async fn pub_messages(&mut self, subjects: &[&str], msgs: &[&[u8]]) -> std::io::Result<()> {
         use std::io::Write;
-        let msg_buf = BytesMut::new(); //  self.msg_buf.take().expect("must have");
+        let msg_buf = self.msg_buf.take().expect("must have");
         let mut writer = msg_buf.writer();
-        for i in 0..subject.len() {
+        for i in 0..subjects.len() {
             writer.write("PUB ".as_bytes())?;
-            writer.write(subject[i].as_bytes())?;
+            writer.write(subjects[i].as_bytes())?;
             //        write!(writer, subject)?;
-            write!(writer, " {}\r\n", msg[i].len())?;
-            writer.write(msg[i])?; //todo 这个需要copy么?最好别copy
+            write!(writer, " {}\r\n", msgs[i].len())?;
+            writer.write(msgs[i])?; //todo 这个需要copy么?最好别copy
             writer.write("\r\n".as_bytes())?;
         }
         let mut msg_buf = writer.into_inner();
         let mut writer = self.writer.lock().await;
-        {
-            let s = unsafe { std::str::from_utf8_unchecked(msg_buf.bytes()) };
-            if s.find("JJP").is_some() {
-                println!("send={}", s);
-                std::process::exit(32);
-            }
-        }
-        writer.write(msg_buf.bytes()).await?;
-        //        msg_buf.clear();
-        //        self.msg_buf = Some(msg_buf);
+
+        writer.write_all(msg_buf.bytes()).await?;
+        msg_buf.clear();
+        self.msg_buf = Some(msg_buf);
         Ok(())
     }
     //    type MessageHandler = Box<dyn Fn(&[u8]) -> Result<()> + Sync + Send >;
@@ -170,14 +164,13 @@ impl Client {
         let mut writer = self.writer.lock().await;
         if let Some(q) = queue {
             writer
-                .write(format!("SUB {} {} {}\r\n", subject, q, self.sid).as_bytes())
+                .write_all(format!("SUB {} {} {}\r\n", subject, q, self.sid).as_bytes())
                 .await?;
         } else {
             writer
-                .write(format!("SUB {} {}\r\n", subject, self.sid).as_bytes())
+                .write_all(format!("SUB {} {}\r\n", subject, self.sid).as_bytes())
                 .await?;
         }
-        //        let (tx, rx) = mpsc::unbounded_channel();
         self.handler
             .lock()
             .await
