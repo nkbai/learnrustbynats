@@ -40,12 +40,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let opt: Opt = Opt::from_args();
     println!("opt={:?}", opt);
     println!("Hello, world!");
-    let start_wg = WaitGroup::new();
-    let done_wg = WaitGroup::new();
+    let mut start_wg = WaitGroup::new("start_wg1".into(), opt.num_subs);
+    let mut done_wg = WaitGroup::new("donw_wg".into(), opt.num_pubs + opt.num_subs);
     let bench = Arc::new(Mutex::new(Benchmark::new("Nats")));
-    done_wg.add((opt.num_pubs + opt.num_subs) as isize).await;
-
-    start_wg.add(opt.num_subs as isize).await;
 
     for _ in 0..opt.num_subs {
         let mut c = Client::connect(opt.urls.as_str()).await.unwrap();
@@ -56,13 +53,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         tokio::spawn(async move {
             run_subscriber(&mut c, start_wg, done_wg, opt, bench).await;
             c.close();
+            println!("run_subscriber finished");
         });
     }
-    start_wg.await;
+    println!("startwg1 start wait");
+    start_wg.wait().await;
     println!("subs all started.");
-    let start_wg = WaitGroup::new();
+    let mut start_wg = WaitGroup::new("start_wg2".into(), opt.num_pubs);
 
-    start_wg.add(opt.num_pubs as isize).await;
     let pub_counts = msgs_per_client(opt.num_msgs, opt.num_pubs);
     for i in 0..opt.num_pubs {
         let mut c = Client::connect(opt.urls.as_str()).await.unwrap();
@@ -74,11 +72,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         tokio::spawn(async move {
             run_publiser(&mut c, start_wg, done_wg, num_msgs, opt, bench).await;
             c.close();
+            println!("run_publiser finished");
         });
     }
-    start_wg.await;
+    start_wg.wait().await;
     println!("pubs all started.");
-    done_wg.await;
+    done_wg.wait().await;
     println!("all task stopped.");
     println!("{}\n", bench.lock().await.report());
     if opt.csv_file.len() > 0 {
@@ -92,8 +91,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 async fn run_publiser(
     c: &mut Client,
-    start_wg: WaitGroup,
-    done_wg: WaitGroup,
+    mut start_wg: WaitGroup,
+    mut done_wg: WaitGroup,
     num_msgs: usize,
     opt: Opt,
     bench: Arc<Mutex<Benchmark>>,
@@ -103,7 +102,7 @@ async fn run_publiser(
     let start = Instant::now();
     let t = 0..num_msgs;
     let mut i = 0;
-    let step = 500;
+    let step = 5000;
     let mut msgs = Vec::with_capacity(step);
     let mut subjects = Vec::with_capacity(step);
     while i < num_msgs {
@@ -141,8 +140,8 @@ async fn run_publiser(
 
 async fn run_subscriber(
     c: &mut Client,
-    start_wg: WaitGroup,
-    done_wg: WaitGroup,
+    mut start_wg: WaitGroup,
+    mut done_wg: WaitGroup,
     opt: Opt,
     bench: Arc<Mutex<Benchmark>>,
 ) {
@@ -163,7 +162,7 @@ async fn run_subscriber(
                 if received_msgs >= expected_msgs {
                     if let Some(tx) = tx.take() {
                         let _ = tx.send((received_msgs, received_bytes));
-                        println!("sub end.");
+                        println!("sub message end.");
                     }
                 }
                 Ok(())
@@ -180,6 +179,7 @@ async fn run_subscriber(
         Instant::now(),
     );
     bench.lock().await.add_sub_sample(s);
+    println!("subsriber done");
     done_wg.done().await;
 }
 #[test]

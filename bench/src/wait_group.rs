@@ -52,17 +52,15 @@ use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
+use tokio::sync::mpsc;
 
 #[derive(Clone)]
 /// Enables multiple tasks to synchronize the beginning or end of some computation.
 pub struct WaitGroup {
-    inner: Arc<Inner>,
-}
-
-struct Inner {
-    started: AtomicBool,
-    count: Mutex<isize>,
-    waker: Mutex<Option<Waker>>,
+    name: String, //for test
+    count: usize,
+    tx: mpsc::Sender<()>,
+    rx: Arc<Mutex<mpsc::Receiver<()>>>,
 }
 
 impl WaitGroup {
@@ -73,84 +71,31 @@ impl WaitGroup {
     /// use async_wg::WaitGroup;
     /// let wg = WaitGroup::new();
     /// ```
-    pub fn new() -> WaitGroup {
+    pub fn new(name: String, count: usize) -> WaitGroup {
+        let mut count2 = count;
+        if count2 == 0 {
+            count2 = 1;
+        }
+        let (tx, rx) = mpsc::channel(count2);
         WaitGroup {
-            inner: Arc::new(Inner {
-                started: AtomicBool::new(false),
-                count: Mutex::new(0),
-                waker: Mutex::new(None),
-            }),
-        }
-    }
-
-    /// Add count n.
-    ///
-    /// # Panic
-    /// 1. The argument `delta` must be a non negative number (> 0).
-    /// 2. The max count must be less than `isize::max_value()`.
-    pub async fn add(&self, delta: isize) {
-        if delta < 0 {
-            panic!("The argument `delta` of wait group `add` must be a positive number");
-        }
-        if self
-            .inner
-            .started
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            panic!("cannot add after started.");
-        }
-        let mut count = self.inner.count.lock().await;
-        *count += delta;
-
-        if *count >= isize::max_value() {
-            panic!("wait group count is too large");
+            name,
+            tx,
+            rx: Arc::new(Mutex::new(rx)),
+            count,
         }
     }
 
     /// Done count 1.
-    pub async fn done(&self) {
-        let mut count = self.inner.count.lock().await;
-        *count -= 1;
-        if *count < 0 {
-            panic!("done must equal add");
-        }
-        if *count <= 0 {
-            if let Some(waker) = &*self.inner.waker.lock().await {
-                waker.clone().wake();
-            }
+    pub async fn done(&mut self) {
+        if let Err(e) = self.tx.send(()).await {
+            panic!("{} send error", self.name);
         }
     }
-
-    /// Get the inner count of `WaitGroup`, the primary count is `0`.
-    pub async fn count(&self) -> isize {
-        *self.inner.count.lock().await
-    }
-}
-
-impl Future for WaitGroup {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        self.inner
-            .started
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        println!("wait group polled.");
-        let mut count = self.inner.count.lock();
-        let pin_count = Pin::new(&mut count);
-        if let Poll::Ready(count) = pin_count.poll(cx) {
-            if *count <= 0 {
-                return Poll::Ready(());
-            }
+    pub async fn wait(&mut self) {
+        let mut rx = self.rx.lock().await;
+        for i in 0..self.count {
+            rx.recv().await;
         }
-        drop(count);
-
-        let mut waker = self.inner.waker.lock();
-        let pin_waker = Pin::new(&mut waker);
-        if let Poll::Ready(mut waker) = pin_waker.poll(cx) {
-            *waker = Some(cx.waker().clone());
-        }
-
-        Poll::Pending
     }
 }
 
@@ -160,68 +105,17 @@ mod tests {
 
     #[tokio::main]
     #[test]
-    async fn add_zero() {
-        let wg = WaitGroup::new();
-        wg.add(0).await;
-        //        wg.done().await;
-        wg.await
-    }
-
-    #[tokio::test]
-    #[should_panic]
-    async fn add_neg_one() {
-        let wg = WaitGroup::new();
-        wg.add(-1).await;
-    }
-
-    #[tokio::main]
-    #[test]
-    #[should_panic]
-    async fn add_very_max() {
-        let wg = WaitGroup::new();
-        wg.add(isize::max_value()).await;
-    }
-
-    #[tokio::main]
-    #[test]
-    async fn add() {
-        let wg = WaitGroup::new();
-        wg.add(1).await;
-        wg.add(10).await;
-        assert_eq!(*wg.inner.count.lock().await, 11);
-    }
-
-    #[tokio::main]
-    #[test]
-    #[should_panic]
-    async fn done() {
-        let wg = WaitGroup::new();
-        wg.done().await;
-        wg.done().await; //done次数超过了await
-        assert_eq!(*wg.inner.count.lock().await, -2);
-    }
-
-    #[tokio::main]
-    #[test]
-    async fn count() {
-        let wg = WaitGroup::new();
-        assert_eq!(wg.count().await, 0);
-        wg.add(10).await;
-        assert_eq!(wg.count().await, 10);
-        wg.done().await;
-        assert_eq!(wg.count().await, 9);
-    }
-    #[tokio::main]
-    #[test]
     async fn can_quit() {
-        let wg = WaitGroup::new();
-        assert_eq!(wg.count().await, 0);
-        wg.add(1).await;
-        let wg2 = wg.clone();
+        let mut wg = WaitGroup::new("test".into(), 4);
+        assert_eq!(wg.count, 4);
+        let mut wg2 = wg.clone();
         tokio::spawn(async move {
             tokio::time::delay_for(tokio::time::Duration::from_millis(10)).await;
             wg2.done().await;
+            wg2.done().await;
+            wg2.done().await;
+            wg2.done().await;
         });
-        wg.await
+        wg.wait().await
     }
 }
