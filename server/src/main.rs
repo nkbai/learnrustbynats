@@ -2,7 +2,6 @@
 #![feature(hash_raw_entry)]
 
 use crate::server::Server;
-use crate::simple_sublist::SimpleSubList;
 use crate::sublist::TrieSubList;
 use jemallocator::Jemalloc;
 use std::error::Error;

@@ -3,12 +3,12 @@ use crate::parser::{ParseResult, Parser, PubArg, SubArg};
 use crate::server::*;
 use crate::simple_sublist::{ArcSubResult, ArcSubscription, SubListTrait, Subscription};
 use rand::{RngCore, SeedableRng};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::error::Error;
-use std::sync::{Arc, Once};
+use std::sync::Arc;
 use tokio::io::*;
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
 
 #[derive(Debug)]
 pub struct Client<T: SubListTrait> {
@@ -16,17 +16,50 @@ pub struct Client<T: SubListTrait> {
     pub cid: u64,
     pub msg_sender: Arc<Mutex<ClientMessageSender>>,
 }
+
 #[derive(Debug)]
 pub struct ClientMessageSender {
-    writer: WriteHalf<TcpStream>,
-    msg_buf: Option<bytes::BytesMut>,
+    writer: Option<WriteHalf<TcpStream>>,
+    msg_buf: Option<Vec<u8>>,
 }
 impl ClientMessageSender {
     pub fn new(writer: WriteHalf<TcpStream>) -> Self {
         Self {
-            writer,
-            msg_buf: Some(bytes::BytesMut::with_capacity(1024)),
+            writer: Some(writer),
+            msg_buf: Some(Vec::with_capacity(512)),
         }
+    }
+    async fn send_all(&mut self) -> std::io::Result<()> {
+        if let Some(ref mut writer) = self.writer {
+            let r = writer
+                .write_all(self.msg_buf.as_ref().unwrap().as_slice())
+                .await;
+            self.msg_buf.as_mut().unwrap().clear();
+            r
+        } else {
+            Ok(())
+        }
+    }
+}
+#[derive(Debug, Clone)]
+pub struct ClientMessageSenderWrapper(Arc<Mutex<ClientMessageSender>>, usize);
+impl std::cmp::PartialEq for ClientMessageSenderWrapper {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+/*
+为了能够将ArcSubscription,必须实现下面这些Trait
+*/
+impl std::cmp::Eq for ClientMessageSenderWrapper {}
+impl std::cmp::PartialOrd for ClientMessageSenderWrapper {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl std::cmp::Ord for ClientMessageSenderWrapper {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.1.cmp(&other.1)
     }
 }
 impl<T: SubListTrait + Send + 'static> Client<T> {
@@ -42,16 +75,20 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
             cid,
             msg_sender: msg_sender.clone(),
         };
-        tokio::spawn(Client::client_task(c, reader));
+        tokio::spawn(async move {
+            Client::client_task(c, reader).await;
+            println!("client {}  client_task quit", cid);
+        });
         msg_sender
     }
     async fn client_task(self, mut reader: ReadHalf<TcpStream>) {
         let mut parser = Parser::new();
         let mut count: i32 = 0;
         let mut subs = HashMap::new();
-        let mut buf = [0; 1024 * 640];
+        let mut buf = [0; 1024 * 64];
         let mut rng = rand::rngs::StdRng::from_entropy();
         let mut cache = HashMap::new();
+        let mut pendings = BTreeSet::new();
         loop {
             //            let mut buf: Vec<u8> = Vec::new();
             //            let r = tokio::io::copy(&mut reader, &mut buf).await;
@@ -74,6 +111,7 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
                     .await;
                 return;
             }
+            //            pendings.clear();
             let mut buf2 = &buf[0..n];
             loop {
                 let r = parser.parse(&buf2[..]);
@@ -98,7 +136,10 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
                         }
                     }
                     ParseResult::Pub(ref pub_arg) => {
-                        if let Err(e) = self.process_pub(pub_arg, &mut cache, &mut rng).await {
+                        if let Err(e) = self
+                            .process_pub(pub_arg, &mut cache, &mut rng, &mut pendings)
+                            .await
+                        {
                             self.process_error(e, subs).await;
                             return;
                         }
@@ -110,6 +151,17 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
                 }
                 buf2 = &buf2[left..];
             }
+            //批量处理发送
+            for c in pendings.iter() {
+                let c = c.clone();
+                tokio::spawn(async move {
+                    let mut sender = c.0.lock().await;
+                    if let Err(e) = sender.send_all().await {
+                        println!("send_all error {}", e);
+                    }
+                });
+            }
+            pendings.clear();
         }
     }
     async fn process_error<E: Error>(&self, err: E, subs: HashMap<String, ArcSubscription>) {
@@ -122,9 +174,12 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
                 }
             }
         }
-        let r = self.msg_sender.lock().await.writer.shutdown().await;
-        if r.is_err() {
-            println!("shutdown err {:?}", r.unwrap_err());
+        let mut sender = self.msg_sender.lock().await;
+        if let Some(mut writer) = sender.writer.take() {
+            sender.msg_buf.take();
+            if let Err(e) = writer.shutdown().await {
+                println!("shutdown err {:?}", e);
+            }
         }
     }
     async fn process_sub(
@@ -149,6 +204,7 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         pub_arg: &PubArg<'_>,
         cache: &mut HashMap<String, ArcSubResult>,
         rng: &mut rand::rngs::StdRng,
+        pendings: &mut BTreeSet<ClientMessageSenderWrapper>,
     ) -> crate::error::Result<()> {
         let sub_result = {
             if let Some(r) = cache.get(pub_arg.subject) {
@@ -161,27 +217,13 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
             }
         };
         if sub_result.psubs.len() > 0 {
-            let msg = Arc::new(Vec::from(pub_arg.msg));
-            let (tx, mut rx) = mpsc::channel(sub_result.psubs.len());
             for sub in sub_result.psubs.iter() {
-                let sub = Arc::clone(sub);
-                let msg = msg.clone();
-                let mut tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = Self::send_message2(sub, msg)
-                        .await
-                        .map_err(|_| NError::new(ERROR_CONNECTION_CLOSED))
-                    {
-                        println!("should close sub client");
-                        //todo close sub client
-                    }
-                    if let Err(e) = tx.send(()).await {
-                        panic!("never failed");
-                    }
-                });
-            }
-            for _ in 0..sub_result.psubs.len() {
-                rx.recv().await;
+                self.send_message(sub.as_ref(), pub_arg, pendings)
+                    .await
+                    .map_err(|e| {
+                        println!("send message error {}", e);
+                        NError::new(ERROR_CONNECTION_CLOSED)
+                    })?;
             }
         }
         if sub_result.qsubs.len() > 0 {
@@ -190,7 +232,7 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
                 let n = rng.next_u32();
                 let n = n as usize % qsubs.len();
                 let sub = qsubs.get(n).unwrap();
-                self.send_message(sub.as_ref(), pub_arg)
+                self.send_message(sub.as_ref(), pub_arg, pendings)
                     .await
                     .map_err(|_| NError::new(ERROR_CONNECTION_CLOSED))?;
             }
@@ -202,28 +244,31 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
     /// MSG <subject> <sid> <size>\r\n
     /// <message>\r\n
     /// ```
-    async fn send_message(&self, sub: &Subscription, pub_arg: &PubArg<'_>) -> std::io::Result<()> {
+    async fn send_message(
+        &self,
+        sub: &Subscription,
+        pub_arg: &PubArg<'_>,
+        pendings: &mut BTreeSet<ClientMessageSenderWrapper>,
+    ) -> std::io::Result<()> {
         let mut msg_sender = sub.msg_sender.lock().await;
-        let msg_buf = msg_sender.msg_buf.take().expect("must have");
-        let writer = &mut msg_sender.writer;
-        let mut buf = msg_buf.writer();
-        buf.write("MSG ".as_bytes())?;
-        buf.write(sub.subject.as_bytes())?;
-        buf.write(" ".as_bytes())?;
-        buf.write(sub.sid.as_bytes())?;
-        buf.write(" ".as_bytes())?;
-        buf.write(pub_arg.size_buf.as_bytes())?;
-        buf.write("\r\n".as_bytes())?;
-        buf.write(pub_arg.msg)?; //经测试,如果这里不使用缓存,而是多个await,性能会大幅下降.
-        buf.write("\r\n".as_bytes())?;
-        let mut msg_buf = buf.into_inner();
-        writer.write_all(msg_buf.bytes()).await?;
-        //        writer.flush().await?; 暂不需要flush,因为没有使用BufWriter
-        msg_buf.clear();
-        msg_sender.msg_buf = Some(msg_buf);
+        if let Some(ref mut msg_buf) = msg_sender.msg_buf {
+            let id = msg_sender.deref() as *const ClientMessageSender as usize;
+            let msg_buf = msg_sender.msg_buf.as_mut().unwrap();
+
+            msg_buf.extend_from_slice("MSG ".as_bytes());
+            msg_buf.extend_from_slice(sub.subject.as_bytes());
+            msg_buf.extend_from_slice(" ".as_bytes());
+            msg_buf.extend_from_slice(sub.sid.as_bytes());
+            msg_buf.extend_from_slice(" ".as_bytes());
+            msg_buf.extend_from_slice(pub_arg.size_buf.as_bytes());
+            msg_buf.extend_from_slice("\r\n".as_bytes());
+            msg_buf.extend_from_slice(pub_arg.msg); //经测试,如果这里不使用缓存,而是多个await,性能会大幅下降.
+            msg_buf.extend_from_slice("\r\n".as_bytes());
+            pendings.insert(ClientMessageSenderWrapper(sub.msg_sender.clone(), id));
+        }
         Ok(())
     }
-    async fn send_message2(sub: Arc<Subscription>, msg: Arc<Vec<u8>>) -> std::io::Result<()> {
+    /* async fn send_message2(sub: Arc<Subscription>, msg: Arc<Vec<u8>>) -> std::io::Result<()> {
         let mut msg_sender = sub.msg_sender.lock().await;
         let msg_buf = msg_sender.msg_buf.take().expect("must have");
         let writer = &mut msg_sender.writer;
@@ -243,7 +288,7 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         msg_buf.clear();
         msg_sender.msg_buf = Some(msg_buf);
         Ok(())
-    }
+    }*/
 }
 #[cfg(test)]
 pub mod test_helper {
@@ -279,9 +324,8 @@ pub mod test_helper {
         SENDER.clone()
     }
 }
-use bytes::buf::BufMutExt;
-use bytes::Buf;
-use std::io::Write;
+use std::cmp::Ordering;
+use std::ops::Deref;
 #[cfg(test)]
 pub use test_helper::new_test_tcp_writer;
 
@@ -289,6 +333,7 @@ pub use test_helper::new_test_tcp_writer;
 mod tests {
     use super::*;
     extern crate test;
+    use std::io::Write;
     use test::Bencher;
 
     #[test]
@@ -300,10 +345,20 @@ mod tests {
             println!("next={}", r.next_u32());
         }
     }
+    #[test]
+    fn test_bytes() {
+        let mut buf = Vec::with_capacity(100);
+        buf.extend_from_slice("hello".as_bytes());
+        assert_eq!(buf.len(), 5);
+        assert_eq!(buf.capacity(), 100);
+        buf.clear();
+        assert_eq!(buf.capacity(), 100);
+        assert_eq!(buf.len(), 0);
+    }
     #[bench]
     fn bench_gen_rng(b: &mut Bencher) {
         b.iter(|| {
-            let mut r = rand::rngs::StdRng::from_entropy();
+            let r = rand::rngs::StdRng::from_entropy();
             drop(r);
         });
     }

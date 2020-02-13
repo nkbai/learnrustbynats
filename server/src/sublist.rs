@@ -427,7 +427,7 @@ impl TrieSubList {
         }
         false
     }
-    fn match_test(&mut self, subject: &str) -> ArcSubResult {
+    fn match_test(&mut self, _subject: &str) -> ArcSubResult {
         //        Arc::new(SubResult::new())
         self.d.clone()
     }
@@ -571,7 +571,7 @@ fn test_new_sub_arc(subject: &str) -> ArcSubscription {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn verify_count(sub: &TrieSubList, count: usize) {
+    fn verify_count(_sub: &TrieSubList, _count: usize) {
         //        assert_eq!(
         //            sub.count(),
         //            count,
@@ -586,7 +586,7 @@ mod tests {
     fn verify_qlen(r: &Vec<Vec<Arc<Subscription>>>, l: usize) {
         assert_eq!(r.len(), l, "queue results len expect={},got={}", l, r.len());
     }
-    fn verify_num_levels(s: &TrieSubList, l: usize) {
+    fn verify_num_levels(_s: &TrieSubList, l: usize) {
         //        assert_eq!(
         //            s.num_levels(),
         //            l,
@@ -791,7 +791,6 @@ mod tests {
     fn test_sublist_basic_queue_results() {
         let mut s = TrieSubList::new();
         let subject = "foo";
-        let sub = Arc::new(test_new_sub(subject));
         let sub1 = Arc::new(new_qsub(subject, "bar"));
         let sub2 = Arc::new(new_qsub(subject, "baz"));
 
@@ -1089,7 +1088,7 @@ mod benchmark {
     }
     #[bench]
     fn test_search_order3(b: &mut Bencher) {
-        let mut v = get_test_array();
+        let v = get_test_array();
         b.iter(|| {
             assert_eq!(9000, search_order3(v.as_slice()));
         })
