@@ -1,4 +1,5 @@
 before any optimaztion: debug server+client
+``` 
 
 Nats pub/sub stats: 28507 msgs/sec ~ 3649009.168600655/sec
   Pub stats: 2770 msgs/sec ~ 354636.4610452923/sec
@@ -15,9 +16,11 @@ Nats pub/sub stats: 28507 msgs/sec ~ 3649009.168600655/sec
    [10] 2591 msgs/sec ~ 331744.08291154966/sec (100000 msgs)
    min 2591 | avg 2591 | max  2591 | stddev 0 msgs
 
+```
 
 
 before any optimaztion: release server+client 
+``` 
 Nats pub/sub stats: 61389 msgs/sec ~ 7857896.78813678/sec
   Pub stats: 5882 msgs/sec ~ 752915.7634376923/sec
   Sub stats: 55808 msgs/sec ~ 7143542.5346698/sec
@@ -32,10 +35,11 @@ Nats pub/sub stats: 61389 msgs/sec ~ 7857896.78813678/sec
    [9] 5581 msgs/sec ~ 714368.6850990714/sec (100000 msgs)
    [10] 5581 msgs/sec ~ 714399.5103139627/sec (100000 msgs)
    min 5580 | avg 5580 | max  5581 | stddev 0.8944271909999159 msgs
-
+```
 
 
 ## 使用BytesMut优化缓存,减少await调用,就有六倍的提升.
+```
 Nats pub/sub stats: 377984 msgs/sec ~ 48382031.15402761/sec
   Pub stats: 36107 msgs/sec ~ 4621775.446487484/sec
   Sub stats: 343622 msgs/sec ~ 43983664.68547965/sec
@@ -50,10 +54,13 @@ Nats pub/sub stats: 377984 msgs/sec ~ 48382031.15402761/sec
    [9] 34363 msgs/sec ~ 4398570.699846082/sec (100000 msgs)
    [10] 34370 msgs/sec ~ 4399408.850882781/sec (100000 msgs)
    min 34363 | avg 34370 | max  34378 | stddev 4.969909455915671 msgs
+```
+
 ## 使用多个pub,测试,代码和刚刚的一样,
+
 性能有10%以上的提升,但是观察到nats-server cpu占用一致比较低,没有超过client
    cargo run  --release  -- --subject test --num-subs 10 --num-msgs 1000000 --num-pubs 10 
-
+```
    Nats pub/sub stats: 433364 msgs/sec ~ 55470702.813337795/sec
   Pub stats: 41424 msgs/sec ~ 5302354.359580678/sec
    [1] 4149 msgs/sec ~ 531126.7721818777/sec (100000 msgs)
@@ -78,12 +85,13 @@ Nats pub/sub stats: 377984 msgs/sec ~ 48382031.15402761/sec
    [9] 39396 msgs/sec ~ 5042811.453494481/sec (1000000 msgs)
    [10] 39396 msgs/sec ~ 5042791.16484889/sec (1000000 msgs)
    min 39396 | avg 39397 | max  39399 | stddev 1.140175425099138 msgs
-
+```
 
 ## 优化,msg_buf不再每次都分配
 但是这里有一个问题,这个buf什么时候释放呢?一直占着?并且不会缩小.
 只要连接不断开,就会一直占用.
 经测试影响不大,因为根本就没有用到msg_buf,目前的msg_size是128,不会用到.
+```
 Nats pub/sub stats: 377535 msgs/sec ~ 48324568.42183404/sec
   Pub stats: 36157 msgs/sec ~ 4628158.023356056/sec
   Sub stats: 343214 msgs/sec ~ 43931425.83803094/sec
@@ -113,7 +121,7 @@ Nats pub/sub stats: 385345 msgs/sec ~ 49324272.01149149/sec
    [9] 35034 msgs/sec ~ 4484385.156475487/sec (100000 msgs)
    [10] 35031 msgs/sec ~ 4484024.728317408/sec (100000 msgs)
    min 35031 | avg 35044 | max  35053 | stddev 7.113367697511496 msgs
-
+```
 
 ## 并发发送
 send_message由串行改为并发,
@@ -121,7 +129,7 @@ send_message由串行改为并发,
  这种情况下，无论是client还是server内存占用都非常低。 考虑启用缓存,来空间换时间.
 
 ### --num-pubs 1
-
+```
 Nats pub/sub stats: 376232 msgs/sec ~ 48157765.32076849/sec
   Pub stats: 34386 msgs/sec ~ 4401420.72194075/sec
   Sub stats: 342029 msgs/sec ~ 43779786.65524408/sec
@@ -136,8 +144,9 @@ Nats pub/sub stats: 376232 msgs/sec ~ 48157765.32076849/sec
    [9] 34203 msgs/sec ~ 4378032.975034622/sec (1000000 msgs)
    [10] 34204 msgs/sec ~ 4378138.376806764/sec (1000000 msgs)
    min 34203 | avg 34203 | max  34205 | stddev 1.0954451150103321 msgs
-
+```
 ### --num-pubs 10
+```
 Nats pub/sub stats: 790452 msgs/sec ~ 101177900.76085752/sec
   Pub stats: 75425 msgs/sec ~ 9654401.307397576/sec
    [1] 7579 msgs/sec ~ 970234.0958495921/sec (100000 msgs)
@@ -162,12 +171,14 @@ Nats pub/sub stats: 790452 msgs/sec ~ 101177900.76085752/sec
    [9] 71860 msgs/sec ~ 9198140.883406043/sec (1000000 msgs)
    [10] 71863 msgs/sec ~ 9198546.939085985/sec (1000000 msgs)
    min 71859 | avg 71862 | max  71866 | stddev 2.1213203435596424 msgs
+```
 
 
 ## 加入本地cache
 只是为了测试,没有更新机制
 不完善,可以看到有一定提高,但是不明显,几个百分点的样子
 ### -pubs 1
+```
 Nats pub/sub stats: 390384 msgs/sec ~ 49969156.719011426/sec
   Pub stats: 35743 msgs/sec ~ 4575136.18287007/sec
   Sub stats: 354894 msgs/sec ~ 45426506.108192205/sec
@@ -182,8 +193,9 @@ Nats pub/sub stats: 390384 msgs/sec ~ 49969156.719011426/sec
    [9] 35490 msgs/sec ~ 4542815.080036936/sec (1000000 msgs)
    [10] 35490 msgs/sec ~ 4542788.906937107/sec (1000000 msgs)
    min 35489 | avg 35489 | max  35491 | stddev 1 msgs
-
+```
 ### -pubs 10
+```
    Nats pub/sub stats: 813669 msgs/sec ~ 104149682.70495887/sec
   Pub stats: 77845 msgs/sec ~ 9964231.962461589/sec
    [1] 7821 msgs/sec ~ 1001095.0332549638/sec (100000 msgs)
@@ -208,13 +220,13 @@ Nats pub/sub stats: 390384 msgs/sec ~ 49969156.719011426/sec
    [9] 73971 msgs/sec ~ 9468336.636719728/sec (1000000 msgs)
    [10] 73972 msgs/sec ~ 9468442.361155936/sec (1000000 msgs)
    min 73970 | avg 73974 | max  73979 | stddev 2.9154759474226504 msgs
-   
+```   
 ## 客户端服务端批量消息处理
 在测试过程中发现,单客户端批量消息发送,效果并不理想,两者结合起来,则有大幅度提升
 可以听到到2500000 msgs/sec
 
 ### -pub 1
-```$xslt
+```
 Nats pub/sub stats: 2820266 msgs/sec ~ 360994066.07799476/sec
   Pub stats: 272533 msgs/sec ~ 34884233.19733797/sec
   Sub stats: 2563878 msgs/sec ~ 328176423.70726794/sec
