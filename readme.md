@@ -4,6 +4,24 @@
 
 天实现的消息中间件系统不是基于MQTT,而是基于[nats](https://nats.io/),当然也是为了教学的方便,我们只会实现最核心的消息订阅发布,而围绕其的权限,cluster之类的我们都先屏蔽.对完整nats感兴趣的可以上[nats官网](https://nats.io/)查看完整的功能.
 
+## 相关博客文章
+
+- [1.从零实现一个极简消息中间件](从零实现一个极简消息中间件)
+- [2.parser](从零实现消息中间件-parser)
+- [3.sublist](从零实现消息中间件-sublist)
+- [4.server](从零实现消息中间件-server)
+- [5.server-client](从零实现消息中间件-server.client)
+- [6.client library](从零实现消息中间件-client)
+
+
+## B站相关视频
+
+- [1.parser](https://www.bilibili.com/video/av85936685)
+- [2.sublist](https://www.bilibili.com/video/av86899713/)
+- [3.server](https://www.bilibili.com/video/av90457400/)
+- [4.server-client](https://www.bilibili.com/video/av90457552/)
+- [5.client library](https://www.bilibili.com/video/av90458399/)
+
 ## 协议设计
 nats是一个文本格式的通信协议,本来就非常简单,加上我们这次教学的需要,只保留了最核心的订阅发布系统.那就更简单了. 消息总共只有三种(订阅,发布,消息推送). 
 为了简化实现,就不支持取消订阅功能,如果想取消订阅,只能断开连接了.
