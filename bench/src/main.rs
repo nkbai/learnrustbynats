@@ -38,10 +38,10 @@ struct Opt {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let opt: Opt = Opt::from_args();
-    println!("opt={:?}", opt);
-    println!("Hello, world!");
-    let start_wg = WaitGroup::new();
-    let done_wg = WaitGroup::new();
+    eprintln!("opt={:?}", opt);
+    eprintln!("Hello, world!");
+    let start_wg = WaitGroup::new("start_wg");
+    let done_wg = WaitGroup::new("done_wg");
     let bench = Arc::new(Mutex::new(Benchmark::new("Nats")));
     done_wg.add((opt.num_pubs + opt.num_subs) as isize).await;
 
@@ -58,15 +58,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             c.close();
         });
     }
+    eprintln!("start_wg await start");
     start_wg.await;
-    println!("subs all started.");
-    let start_wg = WaitGroup::new();
+    eprintln!("start_wg await complete");
+    eprintln!("subs all started.");
+    let start_wg2 = WaitGroup::new("start_wg2");
 
-    start_wg.add(opt.num_pubs as isize).await;
+    start_wg2.add(opt.num_pubs as isize).await;
     let pub_counts = msgs_per_client(opt.num_msgs, opt.num_pubs);
     for i in 0..opt.num_pubs {
         let mut c = Client::connect(opt.urls.as_str()).await.unwrap();
-        let start_wg = start_wg.clone();
+        let start_wg = start_wg2.clone();
         let done_wg = done_wg.clone();
         let bench = bench.clone();
         let opt = opt.clone();
@@ -76,16 +78,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
             c.close();
         });
     }
-    start_wg.await;
-    println!("pubs all started.");
+    eprintln!("start_wg2 start await");
+    start_wg2.await;
+    eprintln!("start_wg2 await complete");
+    eprintln!("pubs all started.");
     done_wg.await;
-    println!("all task stopped.");
-    println!("{}\n", bench.lock().await.report());
+    eprintln!("done_wg await complete");
+    eprintln!("all task stopped.");
+    eprintln!("{}\n", bench.lock().await.report());
     if opt.csv_file.len() > 0 {
         tokio::fs::write(opt.csv_file.as_str(), bench.lock().await.csv())
             .await
             .unwrap();
-        println!("saved metric data in csv file {}", opt.csv_file);
+        eprintln!("saved metric data in csv file {}", opt.csv_file);
     }
     Ok(())
 }
@@ -115,11 +120,11 @@ async fn run_publiser(
             j += 1;
             i += 1;
         }
-        //        println!("pub step");
+        //        eprintln!("pub step");
         if msgs.len() > 0 {
-            //            println!("send message len={}", subjects.len());
+            //            eprintln!("send message len={}", subjects.len());
             if let Err(e) = c.pub_messages(subjects.as_slice(), msgs.as_slice()).await {
-                println!("pub message error {}", e);
+                eprintln!("pub message error {}", e);
                 return;
             };
         }
@@ -136,7 +141,7 @@ async fn run_publiser(
     );
     bench.lock().await.add_pub_sample(s);
     done_wg.done().await;
-    println!("one pub stoped.");
+    eprintln!("one pub stoped.");
 }
 
 async fn run_subscriber(
@@ -163,7 +168,7 @@ async fn run_subscriber(
                 if received_msgs >= expected_msgs {
                     if let Some(tx) = tx.take() {
                         let _ = tx.send((received_msgs, received_bytes));
-                        println!("sub end.");
+                        eprintln!("sub end.");
                     }
                 }
                 Ok(())
