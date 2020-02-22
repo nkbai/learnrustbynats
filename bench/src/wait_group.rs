@@ -128,15 +128,19 @@ impl WaitGroup {
 
     /// Done count 1.
     pub async fn done(&self) {
+        eprintln!("{} call done", self.name);
         let mut count_and_waker = self.inner.count_and_waker.lock().await;
         count_and_waker.count -= 1;
         if count_and_waker.count < 0 {
             panic!("{} done must equal add", self.name);
         }
+        eprintln!("{} call done count={}", self.name, count_and_waker.count);
         if count_and_waker.count <= 0 {
             {
                 eprintln!("{} all done", self.name);
-                if let Some(ref waker) = count_and_waker.waker {
+                if let Some(waker) = count_and_waker.waker.take() {
+                    drop(count_and_waker);
+                    eprintln!("drop now");
                     eprintln!("{} call wake", self.name);
                     waker.clone().wake();
                     eprintln!("{} wake complete", self.name);
