@@ -115,7 +115,11 @@ impl WaitGroup {
         {
             panic!("{} cannot add after started.", self.name);
         }
-        let mut count_and_waker = self.inner.count_and_waker.lock().await;
+        let mut count_and_waker = self
+            .inner
+            .count_and_waker
+            .lock2(format!("{}-{}", self.name, "add"))
+            .await;
         count_and_waker.count += delta;
         eprintln!(
             "{} add {}, result={}",
@@ -129,7 +133,11 @@ impl WaitGroup {
     /// Done count 1.
     pub async fn done(&self) {
         eprintln!("{} call done", self.name);
-        let mut count_and_waker = self.inner.count_and_waker.lock().await;
+        let mut count_and_waker = self
+            .inner
+            .count_and_waker
+            .lock2(format!("{}-{}", self.name, "done"))
+            .await;
         count_and_waker.count -= 1;
         if count_and_waker.count < 0 {
             panic!("{} done must equal add", self.name);
@@ -143,6 +151,7 @@ impl WaitGroup {
                     eprintln!("drop now");
                     eprintln!("{} call wake", self.name);
                     waker.clone().wake();
+                    std::thread::sleep(std::time::Duration::from_secs(5));
                     eprintln!("{} wake complete", self.name);
                 } else {
                     eprintln!("{} done before any await", self.name);
@@ -154,7 +163,11 @@ impl WaitGroup {
 
     /// Get the inner count of `WaitGroup`, the primary count is `0`.
     pub async fn count(&self) -> isize {
-        self.inner.count_and_waker.lock().await.count
+        self.inner
+            .count_and_waker
+            .lock2(format!("{}-{}", self.name, "count"))
+            .await
+            .count
     }
 }
 
@@ -166,7 +179,10 @@ impl Future for WaitGroup {
             .started
             .store(true, std::sync::atomic::Ordering::SeqCst);
         eprintln!("{} wait group polled.", self.name);
-        let mut count_and_waker = self.inner.count_and_waker.lock();
+        let mut count_and_waker = self
+            .inner
+            .count_and_waker
+            .lock2(format!("{}-{}", self.name, "poll"));
         let pin_count = Pin::new(&mut count_and_waker);
         if let Poll::Ready(mut count_and_waker) = pin_count.poll(cx) {
             if count_and_waker.count <= 0 {
