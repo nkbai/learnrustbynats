@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         });
     }
     eprintln!("start_wg await start");
-    start_wg.await;
+    start_wg.wait().await;
     eprintln!("start_wg await complete");
     eprintln!("subs all started.");
     let start_wg2 = WaitGroup::new("start_wg2");
@@ -79,10 +79,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         });
     }
     eprintln!("start_wg2 start await");
-    start_wg2.await;
+    start_wg2.wait().await;
     eprintln!("start_wg2 await complete");
     eprintln!("pubs all started.");
-    done_wg.await;
+    done_wg.wait().await;
     eprintln!("done_wg await complete");
     eprintln!("all task stopped.");
     eprintln!("{}\n", bench.lock().await.report());
