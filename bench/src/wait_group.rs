@@ -137,6 +137,7 @@ impl WaitGroup {
         if self.inner.count.load(std::sync::atomic::Ordering::SeqCst) == 0 {
             return;
         }
+        //多个wait group实例,只允许其中一个wait
         let receiver = self.inner.receiver.lock().await.take().unwrap();
         let _ = receiver.await;
     }
